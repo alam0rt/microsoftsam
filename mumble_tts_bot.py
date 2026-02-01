@@ -184,6 +184,7 @@ class MumbleVoiceBot:
         llm_model: str = None,
         llm_api_key: str = None,
         llm_system_prompt: str = None,
+        personality: str = None,
         config_file: str = None,
     ):
         self.host = host
@@ -249,6 +250,7 @@ class MumbleVoiceBot:
                 model=llm_model,
                 api_key=llm_api_key,
                 system_prompt=llm_system_prompt,
+                personality=personality,
                 config_file=config_file,
             )
         else:
@@ -311,6 +313,7 @@ class MumbleVoiceBot:
         model: str = None,
         api_key: str = None,
         system_prompt: str = None,
+        personality: str = None,
         config_file: str = None,
     ):
         """Initialize the LLM provider."""
@@ -344,7 +347,7 @@ class MumbleVoiceBot:
         # Defaults
         final_endpoint = final_endpoint or "http://localhost:11434/v1/chat/completions"
         final_model = final_model or "llama3.2:3b"
-        final_system_prompt = final_system_prompt or self._load_system_prompt()
+        final_system_prompt = final_system_prompt or self._load_system_prompt(personality=personality)
         
         self.llm = OpenAIChatLLM(
             endpoint=final_endpoint,
@@ -355,31 +358,70 @@ class MumbleVoiceBot:
         )
         print(f"[LLM] Initialized: {final_model} @ {final_endpoint}")
     
-    def _load_system_prompt(self, prompt_file: str = None) -> str:
-        """Load system prompt from file, with fallback to default."""
+    def _load_system_prompt(self, prompt_file: str = None, personality: str = None) -> str:
+        """Load system prompt from file, optionally combined with a personality."""
+        base_prompt = None
+        
         # Try specified file first
         if prompt_file and os.path.exists(prompt_file):
             with open(prompt_file, 'r') as f:
                 print(f"[LLM] Loaded prompt from {prompt_file}")
-                return f.read()
+                base_prompt = f.read()
         
         # Try default locations
-        default_paths = [
-            os.path.join(_THIS_DIR, "prompts", "default.md"),
-            os.path.join(_THIS_DIR, "prompts", "default.txt"),
-            "prompts/default.md",
-            "prompts/default.txt",
-        ]
-        
-        for path in default_paths:
-            if os.path.exists(path):
-                with open(path, 'r') as f:
-                    print(f"[LLM] Loaded prompt from {path}")
-                    return f.read()
+        if not base_prompt:
+            default_paths = [
+                os.path.join(_THIS_DIR, "prompts", "default.md"),
+                os.path.join(_THIS_DIR, "prompts", "default.txt"),
+                "prompts/default.md",
+                "prompts/default.txt",
+            ]
+            
+            for path in default_paths:
+                if os.path.exists(path):
+                    with open(path, 'r') as f:
+                        print(f"[LLM] Loaded prompt from {path}")
+                        base_prompt = f.read()
+                        break
         
         # Fallback to inline prompt
-        print("[LLM] Using built-in default prompt")
-        return self._get_fallback_prompt()
+        if not base_prompt:
+            print("[LLM] Using built-in default prompt")
+            base_prompt = self._get_fallback_prompt()
+        
+        # Load personality if specified
+        if personality:
+            personality_prompt = self._load_personality(personality)
+            if personality_prompt:
+                base_prompt = base_prompt + "\n\n" + "=" * 40 + "\n\n" + personality_prompt
+        
+        return base_prompt
+    
+    def _load_personality(self, personality: str) -> str:
+        """Load a personality file by name."""
+        # Check if it's already a path
+        if os.path.exists(personality):
+            with open(personality, 'r') as f:
+                print(f"[LLM] Loaded personality from {personality}")
+                return f.read()
+        
+        # Try personalities directory
+        personality_paths = [
+            os.path.join(_THIS_DIR, "personalities", f"{personality}.md"),
+            os.path.join(_THIS_DIR, "personalities", f"{personality}.txt"),
+            os.path.join(_THIS_DIR, "personalities", personality),
+            f"personalities/{personality}.md",
+            f"personalities/{personality}.txt",
+        ]
+        
+        for path in personality_paths:
+            if os.path.exists(path):
+                with open(path, 'r') as f:
+                    print(f"[LLM] Loaded personality: {personality}")
+                    return f.read()
+        
+        print(f"[LLM] Warning: Personality '{personality}' not found")
+        return None
     
     def _get_fallback_prompt(self) -> str:
         """Fallback prompt if no file is found."""
@@ -759,6 +801,8 @@ def main():
                         help='LLM API key (or use LLM_API_KEY env var)')
     parser.add_argument('--llm-system-prompt', default=None,
                         help='System prompt for the assistant')
+    parser.add_argument('--personality', default=None,
+                        help='Personality to use (e.g., "imperial", or path to file)')
     parser.add_argument('--config', default=None,
                         help='Path to config.yaml')
     
@@ -782,6 +826,7 @@ def main():
         llm_model=args.llm_model,
         llm_api_key=args.llm_api_key,
         llm_system_prompt=args.llm_system_prompt,
+        personality=args.personality,
         config_file=args.config,
     )
     
