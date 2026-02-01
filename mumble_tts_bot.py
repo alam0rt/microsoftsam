@@ -17,14 +17,17 @@ Commands (send as text messages in Mumble):
     @save <name>    - Save the last mimic'd voice (or current voice) with a name
     @voice <name>   - Switch to a previously saved voice
     @voices         - List all available saved voices
+    @clone <url>    - Clone voice from a URL (wav/mp3) and use it
 """
 import argparse
 import os
 import re
 import sys
+import tempfile
 import time
 import threading
 import queue
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from typing import Generator, List
 
@@ -447,6 +450,15 @@ class MumbleTTSBot:
             self._handle_voices_command()
             return
         
+        # Check for @clone <url> command - clone voice from URL
+        if text.strip().lower().startswith('@clone '):
+            url = text.strip()[7:].strip()
+            if url:
+                self._handle_clone_command(url)
+            else:
+                print(f"[Clone] No URL provided for @clone")
+            return
+        
         # Generate and play speech
         try:
             self.speak(text)
@@ -605,6 +617,97 @@ class MumbleTTSBot:
         else:
             print(f"[Voice] No saved voices found in {self.voices_dir}")
             self.speak("No saved voices found.")
+
+    def _handle_clone_command(self, url: str):
+        """Handle @clone <url> command - download audio and use as voice reference.
+        
+        Args:
+            url: URL to a wav or mp3 audio file
+        """
+        print(f"[Clone] Downloading audio from: {url}")
+        
+        # Determine file extension from URL
+        url_lower = url.lower()
+        if '.wav' in url_lower:
+            suffix = '.wav'
+        elif '.mp3' in url_lower:
+            suffix = '.mp3'
+        else:
+            # Default to wav, let soundfile figure it out
+            suffix = '.wav'
+        
+        try:
+            # Download to temp file
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp_path = tmp.name
+                
+                # Set up request with user agent (some servers reject bare requests)
+                req = urllib.request.Request(url, headers={
+                    'User-Agent': 'MumbleTTSBot/1.0'
+                })
+                
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    tmp.write(response.read())
+            
+            print(f"[Clone] Downloaded to {tmp_path}")
+            
+            # Load and encode the voice
+            import soundfile as sf
+            audio, sr = sf.read(tmp_path)
+            
+            # Convert to mono if stereo
+            if len(audio.shape) > 1:
+                audio = audio.mean(axis=1)
+            
+            # Resample to 16kHz if needed (LuxTTS expects 16kHz)
+            if sr != 16000:
+                from scipy import signal as scipy_signal
+                num_samples = int(len(audio) * 16000 / sr)
+                audio = scipy_signal.resample(audio, num_samples)
+                sr = 16000
+            
+            # Ensure float32
+            audio = audio.astype(np.float32)
+            
+            # Need at least 2.5s for voice cloning
+            duration = len(audio) / sr
+            if duration < 2.5:
+                print(f"[Clone] Audio too short ({duration:.1f}s < 2.5s required)")
+                self.speak("Audio too short. Need at least 2.5 seconds.")
+                return
+            
+            print(f"[Clone] Encoding voice from {duration:.1f}s of audio...")
+            
+            # Encode the voice prompt
+            voice_prompt = self.tts.encode_prompt(audio, sr, duration)
+            
+            # Validate the voice prompt
+            if not self._validate_voice_prompt(voice_prompt):
+                print(f"[Clone] Voice encoding failed validation")
+                self.speak("Failed to encode voice from that audio.")
+                return
+            
+            # Update the current voice
+            with self._tts_lock:
+                self.voice_prompt = voice_prompt
+                self.current_voice_name = "cloned"
+            
+            print(f"[Clone] Voice cloned successfully!")
+            self.speak("Voice cloned successfully!", blocking=True)
+            
+        except urllib.error.URLError as e:
+            print(f"[Clone] Download failed: {e}")
+            self.speak("Failed to download audio.")
+        except Exception as e:
+            print(f"[Clone] Error: {e}")
+            self.speak(f"Clone failed: {str(e)[:50]}")
+        finally:
+            # Clean up temp file
+            try:
+                if 'tmp_path' in locals():
+                    os.unlink(tmp_path)
+            except:
+                pass
 
     def on_sound_received(self, user, sound_chunk):
         """Callback for received audio - implements VAD-based speech detection."""
