@@ -2,10 +2,10 @@
 
 ## Overview
 
-Add an LLM "Thinking" module to the existing Mumble TTS bot to enable conversational AI capabilities. The bot already has:
+Add an LLM "Thinking" module to the existing Mumble TTS bot to enable conversational AI capabilities. The bot has:
 - ✅ **Speech-to-Text (STT)** - Whisper (built-in)
 - ✅ **Text-to-Speech (TTS)** - LuxTTS (built-in, 150x realtime, voice cloning)
-- 🚧 **Language Model (LLM)** - **NEW: Any OpenAI-compatible chat endpoint**
+- ✅ **Language Model (LLM)** - Any OpenAI-compatible chat endpoint
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
@@ -17,21 +17,35 @@ Add an LLM "Thinking" module to the existing Mumble TTS bot to enable conversati
                               Audio Response
 ```
 
-## Current Stack
+## Usage
 
-### Whisper (STT) - Already Integrated
+```bash
+# Basic usage with Ollama (default)
+python mumble_tts_bot.py --host mumble.example.com --reference voice.wav
+
+# With custom LLM endpoint (vLLM, OpenAI, etc.)
+python mumble_tts_bot.py --host mumble.example.com --reference voice.wav \
+    --llm-endpoint http://localhost:8000/v1/chat/completions \
+    --llm-model Qwen/Qwen3-32B
+
+# Debug VAD threshold
+python mumble_tts_bot.py --host mumble.example.com --reference voice.wav --debug-rms
+```
+
+## Components
+
+### Whisper (STT) - Built-in
 - Local Whisper model for speech-to-text
 - Processes incoming Mumble audio
+- English-only mode to prevent hallucinations
 
-### LuxTTS (TTS) - Already Integrated
+### LuxTTS (TTS) - Built-in
 - Lightweight zipvoice-based TTS (~1GB VRAM)
 - 150x realtime speed on GPU, realtime on CPU
 - High-quality 48kHz voice cloning
 - Reference audio for voice matching
 
-## New Component: LLM Thinking Module
-
-### LLM Interface (Chat Completions)
+### LLM (Thinking) - Pluggable
 ```
 POST /v1/chat/completions
 Content-Type: application/json
