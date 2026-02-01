@@ -65,3 +65,7 @@ mumble-tts-bot = "mumble_tts_bot:main"
 py-modules = ["mumble_tts_bot"]
 # Include vendored pymumble_py3 in the package path
 package-dir = {"pymumble_py3" = "vendor/botamusique/pymumble_py3"}
+
+[tool.uv]
+# Use find-links for piper-phonemize which has wheels on a separate index
+find-links = ["https://k2-fsa.github.io/icefall/piper_phonemize.html"]

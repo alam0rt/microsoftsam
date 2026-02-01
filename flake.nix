@@ -23,18 +23,34 @@
         ];
         
         # Wrapper script that sets up environment and runs the bot
+        # Note: Must be run from a cloned repo directory (uv needs writable .venv)
         mumble-tts-bot = pkgs.writeShellScriptBin "mumble-tts-bot" ''
           export LD_LIBRARY_PATH="${libPath}:$LD_LIBRARY_PATH"
-          export PATH="${pkgs.lib.makeBinPath [pkgs.ffmpeg pkgs.espeak-ng]}:$PATH"
-          cd "$(dirname "$0")/../share/mumble-tts-bot" 2>/dev/null || cd "${self}"
+          export PATH="${pkgs.lib.makeBinPath [pkgs.ffmpeg pkgs.espeak-ng pkgs.git]}:$PATH"
+          
+          # Check if we're in a valid project directory
+          if [ ! -f "mumble_tts_bot.py" ]; then
+            echo "Error: mumble_tts_bot.py not found in current directory."
+            echo ""
+            echo "This bot must be run from a cloned repository:"
+            echo "  git clone https://github.com/alam0rt/microsoftsam.git"
+            echo "  cd microsoftsam"
+            echo "  nix develop -c uv run python mumble_tts_bot.py --help"
+            echo ""
+            echo "Or use the dev shell:"
+            echo "  nix develop"
+            echo "  uv run python mumble_tts_bot.py --help"
+            exit 1
+          fi
+          
           exec ${pkgs.uv}/bin/uv run python mumble_tts_bot.py "$@"
         '';
       in
       {
-        # Runnable package
+        # Runnable package (must be run from cloned repo)
         packages.default = mumble-tts-bot;
         
-        # App for `nix run`
+        # App for `nix run` (must be run from cloned repo)
         apps.default = {
           type = "app";
           program = "${mumble-tts-bot}/bin/mumble-tts-bot";
