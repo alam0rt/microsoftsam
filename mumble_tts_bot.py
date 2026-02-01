@@ -10,6 +10,13 @@ Usage:
     
     # Debug mode to tune VAD threshold:
     python mumble_tts_bot.py --host localhost --user "TTS Bot" --reference voice.wav --asr --debug-rms
+
+Commands (send as text messages in Mumble):
+    @mimic          - Start mimicking the sender's voice (repeats back what they say)
+    @stop           - Stop mimicking
+    @save <name>    - Save the last mimic'd voice (or current voice) with a name
+    @voice <name>   - Switch to a previously saved voice
+    @voices         - List all available saved voices
 """
 import argparse
 import os
@@ -250,6 +257,7 @@ class MumbleTTSBot:
         asr_threshold: int = 2000,
         debug_rms: bool = False,
         debug_audio: bool = False,
+        voices_dir: str = 'voices',
     ):
         self.host = host
         self.user = user
@@ -259,6 +267,11 @@ class MumbleTTSBot:
         self.device = device
         self.num_steps = num_steps
         self.enable_asr = enable_asr
+        
+        # Voice management
+        self.voices_dir = voices_dir
+        self.current_voice_name = 'default'  # Track which voice is active
+        self.last_mimic_voice = None  # Store the last mimic'd voice prompt for @save
         
         # VAD (Voice Activity Detection) settings
         self.asr_threshold = asr_threshold  # RMS threshold for speech detection
@@ -285,8 +298,26 @@ class MumbleTTSBot:
         print(f"Loading StreamingLuxTTS model on {device}...")
         self.tts = StreamingLuxTTS('YatharthS/LuxTTS', device=device, threads=2)
         
-        print(f"Encoding reference audio: {reference_audio}")
-        self.voice_prompt = self.tts.encode_prompt(reference_audio, rms=0.01)
+        # Ensure voices directory exists
+        os.makedirs(self.voices_dir, exist_ok=True)
+        
+        # Check if we should load from a saved voice or encode fresh
+        reference_name = os.path.splitext(os.path.basename(reference_audio))[0]
+        saved_voice_path = os.path.join(self.voices_dir, f"{reference_name}.pt")
+        
+        if os.path.exists(saved_voice_path):
+            print(f"Loading saved voice from: {saved_voice_path}")
+            self.voice_prompt = torch.load(saved_voice_path, weights_only=False, map_location=self.device)
+            # Ensure tensors are on correct device
+            self.voice_prompt = self._ensure_voice_on_device(self.voice_prompt)
+            self.current_voice_name = reference_name
+        else:
+            print(f"Encoding reference audio: {reference_audio}")
+            self.voice_prompt = self.tts.encode_prompt(reference_audio, rms=0.01)
+            self.current_voice_name = reference_name
+            # Auto-save the reference voice for faster startup next time
+            self._save_voice(reference_name, self.voice_prompt)
+            print(f"Saved voice as '{reference_name}' for faster loading next time")
         
         # Initialize Mumble connection
         print(f"Connecting to {host}:{port} as '{user}'...")
@@ -373,12 +404,187 @@ class MumbleTTSBot:
                     print(f"[Mimic] Stopped mimicking {sender}")
             return
         
+        # Check for @save <name> command - save current or last mimic'd voice
+        if text.strip().lower().startswith('@save '):
+            voice_name = text.strip()[6:].strip()
+            if voice_name:
+                self._handle_save_command(voice_name, sender)
+            else:
+                print(f"[Voice] No name provided for @save")
+            return
+        
+        # Check for @voice <name> command - switch to a saved voice
+        if text.strip().lower().startswith('@voice '):
+            voice_name = text.strip()[7:].strip()
+            if voice_name:
+                self._handle_voice_command(voice_name)
+            else:
+                print(f"[Voice] No name provided for @voice")
+            return
+        
+        # Check for @voices command - list available voices
+        if text.strip().lower() == '@voices':
+            self._handle_voices_command()
+            return
+        
         # Generate and play speech
         try:
             self.speak(text)
         except Exception as e:
             print(f"TTS error: {e}")
     
+    def _save_voice(self, name: str, voice_prompt: dict) -> bool:
+        """Save a voice prompt to disk.
+        
+        Args:
+            name: Name for the voice (will be sanitized)
+            voice_prompt: The encoded voice prompt dict from encode_prompt()
+            
+        Returns:
+            True if saved successfully, False otherwise
+        """
+        # Sanitize name - only allow alphanumeric, dash, underscore
+        safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', name.lower())
+        if not safe_name:
+            safe_name = 'unnamed'
+        
+        voice_path = os.path.join(self.voices_dir, f"{safe_name}.pt")
+        try:
+            torch.save(voice_prompt, voice_path)
+            print(f"[Voice] Saved voice '{safe_name}' to {voice_path}")
+            return True
+        except Exception as e:
+            print(f"[Voice] Failed to save voice: {e}")
+            return False
+    
+    def _load_voice(self, name: str) -> dict | None:
+        """Load a voice prompt from disk.
+        
+        Args:
+            name: Name of the voice to load
+            
+        Returns:
+            The voice prompt dict, or None if not found
+        """
+        safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', name.lower())
+        voice_path = os.path.join(self.voices_dir, f"{safe_name}.pt")
+        
+        if not os.path.exists(voice_path):
+            print(f"[Voice] Voice '{safe_name}' not found at {voice_path}")
+            return None
+        
+        try:
+            # Load with map_location to handle CPU/GPU transfers
+            voice_prompt = torch.load(voice_path, weights_only=False, map_location=self.device)
+            
+            # Ensure all tensors are on the correct device
+            voice_prompt = self._ensure_voice_on_device(voice_prompt)
+            
+            print(f"[Voice] Loaded voice '{safe_name}' from {voice_path}")
+            return voice_prompt
+        except Exception as e:
+            print(f"[Voice] Failed to load voice: {e}")
+            return None
+    
+    def _ensure_voice_on_device(self, voice_prompt: dict) -> dict:
+        """Ensure all tensors in voice_prompt are on the correct device."""
+        result = {}
+        for key, value in voice_prompt.items():
+            if isinstance(value, torch.Tensor):
+                result[key] = value.to(self.device)
+            else:
+                result[key] = value
+        return result
+    
+    def _validate_voice_prompt(self, voice_prompt: dict) -> bool:
+        """Validate a voice prompt to catch corrupted or malformed data.
+        
+        Returns True if valid, False if there's a problem.
+        """
+        required_keys = ['prompt_tokens', 'prompt_features_lens', 'prompt_features', 'prompt_rms']
+        
+        for key in required_keys:
+            if key not in voice_prompt:
+                print(f"[Voice] Missing required key: {key}")
+                return False
+        
+        # Check prompt_features dimensions - should be (1, seq_len, feature_dim)
+        # feature_dim is typically 100 for vocos features
+        pf = voice_prompt['prompt_features']
+        if isinstance(pf, torch.Tensor):
+            if len(pf.shape) != 3:
+                print(f"[Voice] Invalid prompt_features shape: {pf.shape} (expected 3D)")
+                return False
+            batch, seq_len, feat_dim = pf.shape
+            if batch != 1:
+                print(f"[Voice] Invalid batch size: {batch} (expected 1)")
+                return False
+            if feat_dim != 100:
+                print(f"[Voice] Invalid feature dim: {feat_dim} (expected 100)")
+                return False
+            if seq_len > 5000:  # ~50 seconds of audio at 100 frames/sec
+                print(f"[Voice] Suspiciously long sequence: {seq_len} (max expected ~5000)")
+                return False
+            # Check for NaN/Inf
+            if torch.isnan(pf).any() or torch.isinf(pf).any():
+                print(f"[Voice] prompt_features contains NaN or Inf values")
+                return False
+        
+        return True
+    
+    def _list_voices(self) -> List[str]:
+        """List all available saved voices.
+        
+        Returns:
+            List of voice names (without .pt extension)
+        """
+        voices = []
+        if os.path.exists(self.voices_dir):
+            for f in os.listdir(self.voices_dir):
+                if f.endswith('.pt'):
+                    voices.append(f[:-3])  # Remove .pt extension
+        return sorted(voices)
+    
+    def _handle_save_command(self, name: str, sender: str):
+        """Handle @save <name> command.
+        
+        Saves either the last mimic'd voice or the current active voice.
+        """
+        if self.last_mimic_voice is not None:
+            # Save the last mimic'd voice
+            if self._save_voice(name, self.last_mimic_voice):
+                print(f"[Voice] {sender} saved last mimic'd voice as '{name}'")
+        else:
+            # Save the current active voice
+            if self._save_voice(name, self.voice_prompt):
+                print(f"[Voice] {sender} saved current voice as '{name}'")
+    
+    def _handle_voice_command(self, name: str):
+        """Handle @voice <name> command - switch to a saved voice."""
+        voice_prompt = self._load_voice(name)
+        if voice_prompt is not None:
+            self.voice_prompt = voice_prompt
+            self.current_voice_name = name
+            print(f"[Voice] Switched to voice '{name}'")
+            # Speak a confirmation
+            self.speak(f"Voice switched to {name}")
+        else:
+            available = self._list_voices()
+            print(f"[Voice] Available voices: {', '.join(available) if available else 'none'}")
+    
+    def _handle_voices_command(self):
+        """Handle @voices command - list and speak available voices."""
+        voices = self._list_voices()
+        if voices:
+            print(f"[Voice] Available voices: {', '.join(voices)}")
+            print(f"[Voice] Current voice: {self.current_voice_name}")
+            # Speak the list
+            voice_list = ', '.join(voices)
+            self.speak(f"Available voices: {voice_list}. Current voice is {self.current_voice_name}.")
+        else:
+            print(f"[Voice] No saved voices found in {self.voices_dir}")
+            self.speak("No saved voices found.")
+
     def on_sound_received(self, user, sound_chunk):
         """Callback for received audio - implements VAD-based speech detection."""
         user_id = user['session']
@@ -593,6 +799,10 @@ class MumbleTTSBot:
         user_name = user.get('name', 'Unknown')
         buffer_duration = self._get_buffer_duration(user_id)
         
+        # Clear CUDA cache before processing to prevent memory fragmentation
+        if self.device == 'cuda':
+            torch.cuda.empty_cache()
+        
         # Cap at 25 seconds to avoid Whisper's 30s limit
         max_mimic_duration = 25.0
         min_mimic_duration = 2.5  # LuxTTS needs enough audio for convolution layers
@@ -694,6 +904,10 @@ class MumbleTTSBot:
             clone_end = time.time()
             print(f"[Latency] Voice cloning: {clone_end - clone_start:.2f}s")
             
+            # Validate the voice prompt to catch corrupted tensors early
+            if not self._validate_voice_prompt(user_voice_prompt):\n                print(f"[Mimic] Invalid voice prompt generated, skipping...")
+                return
+            
             # Step 3: Generate speech with their voice saying their words
             tts_start = time.time()
             print(f"[Mimic] Speaking back: \"{text}\"")
@@ -714,6 +928,9 @@ class MumbleTTSBot:
             print(f"[Latency] Breakdown: transcribe={transcribe_end - transcribe_start:.2f}s, clone={clone_end - clone_start:.2f}s, tts={tts_end - tts_start:.2f}s")
             print(f"[Mimic] Done mimicking {user_name}!")
             
+            # Store the mimic'd voice so it can be saved with @save
+            self.last_mimic_voice = user_voice_prompt
+            
             # Keep mimic mode active - don't reset mimic_pending
             
         except Exception as e:
@@ -724,6 +941,10 @@ class MumbleTTSBot:
                 os.unlink(temp_path)
             except:
                 pass
+            
+            # Clear CUDA cache after processing to free memory
+            if self.device == 'cuda':
+                torch.cuda.empty_cache()
 
     def speak(self, text: str, streaming: bool = True):
         """Generate speech from text and send to Mumble.
@@ -791,6 +1012,8 @@ def main():
                         help='Show real-time RMS levels to help tune --asr-threshold')
     parser.add_argument('--debug-audio', action='store_true',
                         help='Save audio files sent to Whisper for debugging')
+    parser.add_argument('--voices-dir', default='voices',
+                        help='Directory to store/load saved voice prompts (default: voices/)')
     
     args = parser.parse_args()
     
@@ -810,6 +1033,7 @@ def main():
         asr_threshold=args.asr_threshold,
         debug_rms=args.debug_rms,
         debug_audio=args.debug_audio,
+        voices_dir=args.voices_dir,
     )
     
     bot.start()
