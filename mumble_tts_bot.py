@@ -297,6 +297,11 @@ class MumbleTTSBot:
         # Mimic mode: capture user's voice and speak it back to them (like an annoying child)
         self.mimic_pending = {}  # user_id -> True if actively mimicking this user
         
+        # Interrupt feature: stop TTS when user speaks
+        self._interrupted = threading.Event()  # Signal to stop current TTS
+        self._interrupted_text = None  # Store interrupted text for potential resume
+        self._speaking = threading.Event()  # Track if bot is currently speaking
+        
         # Threading for non-blocking ASR and TTS
         # Use separate thread pools so ASR doesn't block TTS and vice versa
         self._asr_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ASR")
@@ -629,6 +634,12 @@ class MumbleTTSBot:
             self.speech_start_time[user_id] = 0
         
         current_time = time.time()
+        
+        # Check if user is speaking while bot is speaking - trigger interrupt
+        if rms > self.asr_threshold and self._speaking.is_set():
+            if not self._interrupted.is_set():
+                print(f"\n[Interrupt] {user_name} started speaking, interrupting TTS...")
+                self._interrupted.set()
         
         # Check if this chunk contains speech (above threshold)
         if rms > self.asr_threshold:
@@ -1196,22 +1207,43 @@ class MumbleTTSBot:
             voice_prompt: The voice prompt to use
             streaming: If True, use streaming generation
         """
-        if streaming:
-            # Use streaming for faster perceived response time
-            for wav_chunk in self.tts.generate_speech_streaming(
-                text, voice_prompt, num_steps=self.num_steps
-            ):
-                wav_float = wav_chunk.numpy().squeeze()
+        # Mark that we're speaking (for interrupt detection)
+        self._speaking.set()
+        self._interrupted.clear()
+        
+        try:
+            if streaming:
+                # Use streaming for faster perceived response time
+                for wav_chunk in self.tts.generate_speech_streaming(
+                    text, voice_prompt, num_steps=self.num_steps
+                ):
+                    # Check for interrupt between chunks
+                    if self._interrupted.is_set():
+                        print(f"[Interrupt] Stopping TTS playback")
+                        # Clear the sound output buffer
+                        self.mumble.sound_output.clear_buffer()
+                        break
+                    
+                    wav_float = wav_chunk.numpy().squeeze()
+                    wav_float = np.clip(wav_float, -1.0, 1.0)
+                    pcm = (wav_float * 32767).astype(np.int16)
+                    self.mumble.sound_output.add_sound(pcm.tobytes())
+            else:
+                # Non-streaming: generate all audio at once
+                wav = self.tts.generate_speech(text, voice_prompt, num_steps=self.num_steps)
+                
+                # Can still be interrupted before playback starts
+                if self._interrupted.is_set():
+                    print(f"[Interrupt] Stopping TTS before playback")
+                    return
+                
+                wav_float = wav.numpy().squeeze()
                 wav_float = np.clip(wav_float, -1.0, 1.0)
                 pcm = (wav_float * 32767).astype(np.int16)
                 self.mumble.sound_output.add_sound(pcm.tobytes())
-        else:
-            # Non-streaming: generate all audio at once
-            wav = self.tts.generate_speech(text, voice_prompt, num_steps=self.num_steps)
-            wav_float = wav.numpy().squeeze()
-            wav_float = np.clip(wav_float, -1.0, 1.0)
-            pcm = (wav_float * 32767).astype(np.int16)
-            self.mumble.sound_output.add_sound(pcm.tobytes())
+        finally:
+            # Mark that we're done speaking
+            self._speaking.clear()
 
     def speak(self, text: str, voice_prompt: dict = None, blocking: bool = False):
         """Queue text to be spoken (non-blocking by default).
