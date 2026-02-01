@@ -1118,7 +1118,8 @@ class MumbleTTSBot:
             print(f"[Latency] Voice cloning: {clone_end - clone_start:.2f}s")
             
             # Validate the voice prompt to catch corrupted tensors early
-            if not self._validate_voice_prompt(user_voice_prompt):\n                print(f"[Mimic] Invalid voice prompt generated, skipping...")
+            if not self._validate_voice_prompt(user_voice_prompt):
+                print(f"[Mimic] Invalid voice prompt generated, skipping...")
                 return
             
             # Step 3: Generate speech with their voice saying their words
