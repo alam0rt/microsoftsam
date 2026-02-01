@@ -344,7 +344,7 @@ class MumbleVoiceBot:
         # Defaults
         final_endpoint = final_endpoint or "http://localhost:11434/v1/chat/completions"
         final_model = final_model or "llama3.2:3b"
-        final_system_prompt = final_system_prompt or self._get_human_system_prompt()
+        final_system_prompt = final_system_prompt or self._load_system_prompt()
         
         self.llm = OpenAIChatLLM(
             endpoint=final_endpoint,
@@ -355,28 +355,40 @@ class MumbleVoiceBot:
         )
         print(f"[LLM] Initialized: {final_model} @ {final_endpoint}")
     
-    def _get_human_system_prompt(self) -> str:
-        """Get a system prompt that encourages human-like responses."""
-        return """You are a casual, friendly voice assistant chatting in a Mumble voice channel. 
+    def _load_system_prompt(self, prompt_file: str = None) -> str:
+        """Load system prompt from file, with fallback to default."""
+        # Try specified file first
+        if prompt_file and os.path.exists(prompt_file):
+            with open(prompt_file, 'r') as f:
+                print(f"[LLM] Loaded prompt from {prompt_file}")
+                return f.read()
+        
+        # Try default locations
+        default_paths = [
+            os.path.join(_THIS_DIR, "prompts", "default.md"),
+            os.path.join(_THIS_DIR, "prompts", "default.txt"),
+            "prompts/default.md",
+            "prompts/default.txt",
+        ]
+        
+        for path in default_paths:
+            if os.path.exists(path):
+                with open(path, 'r') as f:
+                    print(f"[LLM] Loaded prompt from {path}")
+                    return f.read()
+        
+        # Fallback to inline prompt
+        print("[LLM] Using built-in default prompt")
+        return self._get_fallback_prompt()
+    
+    def _get_fallback_prompt(self) -> str:
+        """Fallback prompt if no file is found."""
+        return """You are a casual voice assistant in a Mumble voice channel.
 
-IMPORTANT - Sound natural and human:
-- Use casual language, contractions (I'm, don't, it's, gonna, wanna)
-- Occasionally use filler words naturally: "um", "well", "so", "like", "you know"
-- Keep responses SHORT - 1-2 sentences max. This is voice chat, not an essay.
-- React with personality: laugh ("haha"), express surprise ("oh wow"), show interest ("ooh, nice!")
-- Don't be overly helpful or formal - be like a friend chatting
-- It's okay to not know things - say "hmm, not sure" or "good question, I dunno"
-- Reference previous things said when relevant ("oh like you mentioned earlier...")
-- Ask follow-up questions sometimes to keep conversation flowing
-
-NEVER:
-- Use bullet points, numbered lists, or markdown formatting
-- Give long explanations unless specifically asked
-- Sound like a corporate assistant or customer service bot
-- Say "I'm an AI" or "As an AI" - just be yourself
-- Use phrases like "Great question!" or "I'd be happy to help"
-
-You're just hanging out in voice chat. Be chill."""
+Your responses will be spoken by TTS. Never use emojis, symbols, or formatting.
+Keep responses to 1-2 sentences. Use casual language and contractions.
+Sound like a friend chatting, not a corporate assistant.
+Write numbers and symbols as words: "about 5 dollars" not "$5"."""
     
     # =========================================================================
     # Conversation Management
