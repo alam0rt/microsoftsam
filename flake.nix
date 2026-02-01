@@ -12,15 +12,22 @@
         pkgs = import nixpkgs {
           inherit system;
           config.allowUnfree = true;
+          config.cudaSupport = true;
         };
 
-        libPath = pkgs.lib.makeLibraryPath [
+        # CUDA packages for GPU support (optional - only on systems with NVIDIA GPUs)
+        cudaLibs = pkgs.lib.optionals (pkgs.stdenv.isLinux) [
+          pkgs.cudaPackages.cudatoolkit
+          pkgs.cudaPackages.cudnn
+        ];
+
+        libPath = pkgs.lib.makeLibraryPath ([
           pkgs.portaudio
           pkgs.libsndfile
           pkgs.libopus
           pkgs.stdenv.cc.cc.lib
           pkgs.zlib
-        ];
+        ] ++ cudaLibs);
         
         # Wrapper script that sets up environment and runs the bot
         # Note: Must be run from a cloned repo directory (uv needs writable .venv)
