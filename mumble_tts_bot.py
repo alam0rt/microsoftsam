@@ -459,10 +459,13 @@ class MumbleTTSBot:
                 if self.mimic_pending.get(user_id):
                     # Mimic mode: repeat what they said back to them (like an annoying child)
                     buffer_duration = self._get_buffer_duration(user_id)
-                    if buffer_duration >= 1.5:  # Need at least 1.5s for decent clone
+                    # Need at least 2.5s for decent voice cloning (LuxTTS needs enough audio
+                    # for the convolution layers - shorter audio causes kernel size errors)
+                    if buffer_duration >= 2.5:
                         self._mimic_user(user, user_id)
                     else:
                         # Too short - just discard and wait for next utterance
+                        print(f"[Mimic] Audio too short ({buffer_duration:.1f}s < 2.5s), waiting for more...")
                         self.audio_buffers[user_id] = []
                 else:
                     # Normal final transcription
@@ -592,6 +595,13 @@ class MumbleTTSBot:
         
         # Cap at 25 seconds to avoid Whisper's 30s limit
         max_mimic_duration = 25.0
+        min_mimic_duration = 2.5  # LuxTTS needs enough audio for convolution layers
+        
+        if buffer_duration < min_mimic_duration:
+            print(f"[Mimic] Audio too short from {user_name} ({buffer_duration:.1f}s < {min_mimic_duration}s)")
+            self.audio_buffers[user_id] = []
+            return
+        
         if buffer_duration > max_mimic_duration:
             print(f"[Mimic] Trimming {buffer_duration:.1f}s to {max_mimic_duration}s")
             # Keep only the last max_mimic_duration seconds
@@ -675,9 +685,12 @@ class MumbleTTSBot:
                 wavfile.write(temp_path, 48000, audio_int16)
             
             # Encode the user's voice as a prompt
+            # Pass the actual duration so LuxTTS doesn't try to load more than we have
+            # LuxTTS internally loads at 24kHz, so we need at least 2s for the conv layers
             clone_start = time.time()
-            print(f"[Mimic] Cloning {user_name}'s voice...")
-            user_voice_prompt = self.tts.encode_prompt(temp_path, rms=0.01)
+            ref_duration = min(buffer_duration, 10.0)  # Cap at 10s for efficiency
+            print(f"[Mimic] Cloning {user_name}'s voice (using {ref_duration:.1f}s reference)...")
+            user_voice_prompt = self.tts.encode_prompt(temp_path, duration=ref_duration, rms=0.01)
             clone_end = time.time()
             print(f"[Latency] Voice cloning: {clone_end - clone_start:.2f}s")
             
