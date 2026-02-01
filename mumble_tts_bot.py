@@ -72,13 +72,14 @@ class StreamingLuxTTS(LuxTTS):
         self._patch_transcriber_for_english()
         
     def _patch_transcriber_for_english(self):
-        """Force English language detection to prevent hallucinations."""
+        """Force English language detection and enable timestamps for long audio."""
         original_transcriber = self.transcriber
         
         def english_transcriber(audio, **kwargs):
             result = original_transcriber(
                 audio,
                 generate_kwargs={"language": "en", "task": "transcribe"},
+                return_timestamps=True,  # Required for audio > 30s
                 **kwargs
             )
             return result
@@ -205,9 +206,9 @@ class MumbleVoiceBot:
         self.audio_buffers = {}  # user_id -> list of PCM bytes
         self.speech_active_until = {}  # user_id -> timestamp
         self.speech_start_time = {}  # user_id -> timestamp
-        self.speech_hold_duration = 1.5  # seconds to wait after speech stops
-        self.min_speech_duration = 0.8  # minimum seconds to transcribe
-        self.max_speech_duration = 30.0  # max seconds before forced processing
+        self.speech_hold_duration = 0.8  # seconds to wait after speech stops (was 1.5)
+        self.min_speech_duration = 0.5  # minimum seconds to transcribe (was 0.8)
+        self.max_speech_duration = 15.0  # max seconds before forced processing (was 30)
         
         # Conversation state per user
         self.conversation_history = {}  # user_id -> list of messages
