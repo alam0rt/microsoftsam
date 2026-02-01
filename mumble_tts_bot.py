@@ -81,6 +81,29 @@ def extract_last_sentence(text: str) -> str:
     return last
 
 
+def get_best_device() -> str:
+    """Auto-detect the best available compute device.
+    
+    Returns 'cuda' if NVIDIA GPU available, 'mps' for Apple Silicon,
+    otherwise 'cpu'.
+    """
+    try:
+        import torch
+        if torch.cuda.is_available():
+            device_name = torch.cuda.get_device_name(0)
+            print(f"[Device] CUDA available: {device_name}")
+            return 'cuda'
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            print("[Device] MPS (Apple Silicon) available")
+            return 'mps'
+        else:
+            print("[Device] Using CPU")
+            return 'cpu'
+    except ImportError:
+        print("[Device] PyTorch not available, defaulting to CPU")
+        return 'cpu'
+
+
 # Common Whisper hallucination patterns (especially with whisper-tiny)
 HALLUCINATION_PATTERNS = [
     r'^\.+$',  # Just dots/periods
@@ -591,9 +614,9 @@ def main():
                         help='Channel to join')
     parser.add_argument('--reference', default='reference.wav',
                         help='Reference audio file for voice cloning')
-    parser.add_argument('--device', default='cpu',
-                        choices=['cpu', 'cuda', 'mps'],
-                        help='Compute device')
+    parser.add_argument('--device', default='auto',
+                        choices=['auto', 'cpu', 'cuda', 'mps'],
+                        help='Compute device (auto = detect best available)')
     parser.add_argument('--steps', type=int, default=4,
                         help='Number of inference steps (quality vs speed)')
     parser.add_argument('--no-asr', action='store_true',
@@ -607,6 +630,9 @@ def main():
     
     args = parser.parse_args()
     
+    # Auto-detect device if not specified
+    device = args.device if args.device != 'auto' else get_best_device()
+    
     bot = MumbleTTSBot(
         host=args.host,
         user=args.user,
@@ -614,7 +640,7 @@ def main():
         password=args.password,
         channel=args.channel,
         reference_audio=args.reference,
-        device=args.device,
+        device=device,
         num_steps=args.steps,
         enable_asr=not args.no_asr,
         asr_threshold=args.asr_threshold,
