@@ -214,19 +214,14 @@ class MumbleVoiceBot:
         self.conversation_timeout = 300.0  # 5 minutes
         self.last_conversation_time = {}  # user_id -> timestamp
         
-        # Interrupt handling
-        self._interrupted = threading.Event()
+        # State flags
         self._speaking = threading.Event()
-        self._last_interrupted_text = None  # What we were saying when interrupted
-        self._was_interrupted = False  # Flag to acknowledge interruption in next response
-        self._interrupt_start_time = 0  # When interrupt sound started
-        self._interrupt_hold_duration = 0.3  # Must speak this long to trigger interrupt
+        self._shutdown = threading.Event()
         
         # Threading
         self._asr_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ASR")
         self._tts_queue = queue.Queue()
         self._tts_lock = threading.Lock()
-        self._shutdown = threading.Event()
         
         # Start TTS worker
         self._tts_worker_thread = threading.Thread(
@@ -520,18 +515,6 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         
         current_time = time.time()
         
-        # Interrupt detection - require sustained speech before triggering
-        if rms > self.asr_threshold and self._speaking.is_set():
-            if self._interrupt_start_time == 0:
-                self._interrupt_start_time = current_time
-            elif current_time - self._interrupt_start_time > self._interrupt_hold_duration:
-                if not self._interrupted.is_set():
-                    print(f"\n[Interrupt] {user_name} wants to speak")
-                    self._interrupted.set()
-                    self._was_interrupted = True
-        elif not self._speaking.is_set():
-            self._interrupt_start_time = 0  # Reset when not speaking
-        
         # Speech detection
         if rms > self.asr_threshold:
             if not self.audio_buffers[user_id]:
@@ -616,35 +599,9 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             
             # Generate LLM response if available
             if self.llm:
-                # Check if we were interrupted and should acknowledge
-                interrupted_prefix = None
-                if self._was_interrupted:
-                    self._was_interrupted = False
-                    interrupted_prefix = random.choice([
-                        "oh sorry, go ahead.",
-                        "sorry, what's up?",
-                        "oh, my bad.",
-                        "sorry, you were saying?",
-                        "oh, yeah?",
-                    ])
-                    print(f"[Interrupt] Acknowledging with: {interrupted_prefix}")
-                    self._tts_queue.put((interrupted_prefix, self.voice_prompt))
-                    # Small pause after the acknowledgment
-                    time.sleep(0.3)
-                else:
-                    # Only add thinking delay/filler if not interrupted
-                    # (if interrupted, they already waited)
-                    think_delay = random.uniform(0.3, 0.8)
-                    
-                    # Sometimes say a filler/acknowledgment before the real response
-                    if random.random() < 0.3:  # 30% chance
-                        filler = random.choice([
-                            "hmm", "let me think", "oh", "well", "so", "uh"
-                        ])
-                        self._tts_queue.put((filler, self.voice_prompt))
-                        think_delay += 0.3
-                    
-                    time.sleep(think_delay)
+                # Small thinking delay
+                think_delay = random.uniform(0.2, 0.5)
+                time.sleep(think_delay)
                 
                 print(f"[LLM] Generating response...")
                 llm_start = time.time()
@@ -683,8 +640,6 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
     def _speak_sync(self, text: str, voice_prompt: dict):
         """Generate and play speech."""
         self._speaking.set()
-        self._interrupted.clear()
-        self._last_interrupted_text = None  # Track what we were saying
         
         try:
             print(f"[TTS] Speaking: \"{text[:50]}{'...' if len(text) > 50 else ''}\"")
@@ -692,13 +647,6 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             for wav_chunk in self.tts.generate_speech_streaming(
                 text, voice_prompt, num_steps=self.num_steps
             ):
-                if self._interrupted.is_set():
-                    print("[TTS] Interrupted")
-                    self.mumble.sound_output.clear_buffer()
-                    # Store what we were saying in case we want to reference it
-                    self._last_interrupted_text = text
-                    break
-                
                 wav_float = wav_chunk.numpy().squeeze()
                 wav_float = np.clip(wav_float, -1.0, 1.0)
                 pcm = (wav_float * 32767).astype(np.int16)
