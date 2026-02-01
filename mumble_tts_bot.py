@@ -28,6 +28,7 @@ import time
 import threading
 import queue
 import urllib.request
+import ssl
 from concurrent.futures import ThreadPoolExecutor
 from typing import Generator, List
 
@@ -646,7 +647,13 @@ class MumbleTTSBot:
                     'User-Agent': 'MumbleTTSBot/1.0'
                 })
                 
-                with urllib.request.urlopen(req, timeout=30) as response:
+                # Create SSL context that doesn't verify certificates
+                # (many audio hosting sites have certificate issues)
+                ssl_ctx = ssl.create_default_context()
+                ssl_ctx.check_hostname = False
+                ssl_ctx.verify_mode = ssl.CERT_NONE
+                
+                with urllib.request.urlopen(req, timeout=30, context=ssl_ctx) as response:
                     tmp.write(response.read())
             
             print(f"[Clone] Downloaded to {tmp_path}")
