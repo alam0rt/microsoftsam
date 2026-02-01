@@ -217,6 +217,9 @@ class MumbleVoiceBot:
         self._interrupted = threading.Event()
         self._speaking = threading.Event()
         self._last_interrupted_text = None  # What we were saying when interrupted
+        self._was_interrupted = False  # Flag to acknowledge interruption in next response
+        self._interrupt_start_time = 0  # When interrupt sound started
+        self._interrupt_hold_duration = 0.3  # Must speak this long to trigger interrupt
         
         # Threading
         self._asr_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ASR")
@@ -463,11 +466,17 @@ You're just hanging out in voice chat. Be chill."""
         
         current_time = time.time()
         
-        # Interrupt detection
+        # Interrupt detection - require sustained speech before triggering
         if rms > self.asr_threshold and self._speaking.is_set():
-            if not self._interrupted.is_set():
-                print(f"\n[Interrupt] {user_name} started speaking")
-                self._interrupted.set()
+            if self._interrupt_start_time == 0:
+                self._interrupt_start_time = current_time
+            elif current_time - self._interrupt_start_time > self._interrupt_hold_duration:
+                if not self._interrupted.is_set():
+                    print(f"\n[Interrupt] {user_name} wants to speak")
+                    self._interrupted.set()
+                    self._was_interrupted = True
+        elif not self._speaking.is_set():
+            self._interrupt_start_time = 0  # Reset when not speaking
         
         # Speech detection
         if rms > self.asr_threshold:
@@ -553,19 +562,35 @@ You're just hanging out in voice chat. Be chill."""
             
             # Generate LLM response if available
             if self.llm:
-                # Add human-like thinking delay (300-800ms)
-                think_delay = random.uniform(0.3, 0.8)
-                
-                # Sometimes say a filler/acknowledgment before the real response
-                # This makes it feel like we're "thinking"
-                if random.random() < 0.3:  # 30% chance
-                    filler = random.choice([
-                        "hmm", "let me think", "oh", "well", "so", "uh"
+                # Check if we were interrupted and should acknowledge
+                interrupted_prefix = None
+                if self._was_interrupted:
+                    self._was_interrupted = False
+                    interrupted_prefix = random.choice([
+                        "oh sorry, go ahead.",
+                        "sorry, what's up?",
+                        "oh, my bad.",
+                        "sorry, you were saying?",
+                        "oh, yeah?",
                     ])
-                    self._tts_queue.put((filler, self.voice_prompt))
-                    think_delay += 0.3  # Extra pause after filler
-                
-                time.sleep(think_delay)
+                    print(f"[Interrupt] Acknowledging with: {interrupted_prefix}")
+                    self._tts_queue.put((interrupted_prefix, self.voice_prompt))
+                    # Small pause after the acknowledgment
+                    time.sleep(0.3)
+                else:
+                    # Only add thinking delay/filler if not interrupted
+                    # (if interrupted, they already waited)
+                    think_delay = random.uniform(0.3, 0.8)
+                    
+                    # Sometimes say a filler/acknowledgment before the real response
+                    if random.random() < 0.3:  # 30% chance
+                        filler = random.choice([
+                            "hmm", "let me think", "oh", "well", "so", "uh"
+                        ])
+                        self._tts_queue.put((filler, self.voice_prompt))
+                        think_delay += 0.3
+                    
+                    time.sleep(think_delay)
                 
                 print(f"[LLM] Generating response...")
                 llm_start = time.time()
