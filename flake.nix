@@ -66,7 +66,7 @@
         # Development shell - provides system deps, use uv for Python
         devShells.default = pkgs.mkShell {
           buildInputs = [
-            pkgs.python311
+            pkgs.python312
             pkgs.uv
             pkgs.portaudio
             pkgs.ffmpeg
@@ -92,6 +92,41 @@
             echo "  uv run python mumble_tts_bot.py --host localhost --user TTSBot --reference reference.wav"
             echo ""
             echo "Note: You need a reference.wav file (3+ seconds) for voice cloning."
+            echo ""
+            echo "Qwen3-TTS (requires CUDA GPU):"
+            echo "  uv run scripts/qwen3_tts_demo.py 0.0.0.0:9999           # Web UI with voice cloning"
+            echo "  uv run scripts/qwen3_tts_demo.py --task CustomVoice    # Predefined speakers"
+            echo "  uv run scripts/qwen3_tts_demo.py --task VoiceDesign    # Voice design from description"
+          '';
+          
+          LD_LIBRARY_PATH = libPath;
+        };
+        
+        # Shell with vLLM from nixpkgs (for serving Qwen3-TTS via API)
+        devShells.vllm = pkgs.mkShell {
+          buildInputs = [
+            pkgs.python312
+            pkgs.uv
+            pkgs.vllm
+            pkgs.git
+            pkgs.openssl
+            pkgs.curl
+          ] ++ cudaLibs;
+
+          shellHook = ''
+            echo "Qwen3-TTS vLLM Environment"
+            echo "=========================="
+            echo ""
+            echo "vLLM ${pkgs.vllm.version} is available from nixpkgs."
+            echo ""
+            echo "For Qwen3-TTS support, you need vllm-omni on top:"
+            echo "  uv pip install vllm-omni"
+            echo ""
+            echo "Then run:"
+            echo "  uv run scripts/qwen3_tts_vllm.py 0.0.0.0:9999"
+            echo ""
+            echo "Or use the qwen-tts demo with built-in web UI:"
+            echo "  uv run scripts/qwen3_tts_demo.py 0.0.0.0:9999"
           '';
           
           LD_LIBRARY_PATH = libPath;
