@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.12"
 # dependencies = [
-#     "qwen-tts>=0.1.0",
+#     "qwen-tts",
 #     "torch>=2.4.0",
 #     "gradio>=4.0.0",
 # ]
