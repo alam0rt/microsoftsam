@@ -20,6 +20,7 @@ Usage:
 import argparse
 import asyncio
 import os
+import random
 import re
 import sys
 import time
@@ -215,6 +216,7 @@ class MumbleVoiceBot:
         # Interrupt handling
         self._interrupted = threading.Event()
         self._speaking = threading.Event()
+        self._last_interrupted_text = None  # What we were saying when interrupted
         
         # Threading
         self._asr_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ASR")
@@ -339,11 +341,7 @@ class MumbleVoiceBot:
         # Defaults
         final_endpoint = final_endpoint or "http://localhost:11434/v1/chat/completions"
         final_model = final_model or "llama3.2:3b"
-        final_system_prompt = final_system_prompt or (
-            "You are a helpful voice assistant in a Mumble voice chat. "
-            "Keep responses concise and conversational (1-3 sentences). "
-            "Be friendly but not overly verbose - this is voice, not text."
-        )
+        final_system_prompt = final_system_prompt or self._get_human_system_prompt()
         
         self.llm = OpenAIChatLLM(
             endpoint=final_endpoint,
@@ -353,6 +351,29 @@ class MumbleVoiceBot:
             timeout=30.0,
         )
         print(f"[LLM] Initialized: {final_model} @ {final_endpoint}")
+    
+    def _get_human_system_prompt(self) -> str:
+        """Get a system prompt that encourages human-like responses."""
+        return """You are a casual, friendly voice assistant chatting in a Mumble voice channel. 
+
+IMPORTANT - Sound natural and human:
+- Use casual language, contractions (I'm, don't, it's, gonna, wanna)
+- Occasionally use filler words naturally: "um", "well", "so", "like", "you know"
+- Keep responses SHORT - 1-2 sentences max. This is voice chat, not an essay.
+- React with personality: laugh ("haha"), express surprise ("oh wow"), show interest ("ooh, nice!")
+- Don't be overly helpful or formal - be like a friend chatting
+- It's okay to not know things - say "hmm, not sure" or "good question, I dunno"
+- Reference previous things said when relevant ("oh like you mentioned earlier...")
+- Ask follow-up questions sometimes to keep conversation flowing
+
+NEVER:
+- Use bullet points, numbered lists, or markdown formatting
+- Give long explanations unless specifically asked
+- Sound like a corporate assistant or customer service bot
+- Say "I'm an AI" or "As an AI" - just be yourself
+- Use phrases like "Great question!" or "I'd be happy to help"
+
+You're just hanging out in voice chat. Be chill."""
     
     # =========================================================================
     # Conversation Management
@@ -375,18 +396,24 @@ class MumbleVoiceBot:
         
         return self.conversation_history[user_id]
     
-    def _add_to_history(self, user_id: int, role: str, content: str):
+    def _add_to_history(self, user_id: int, role: str, content: str, user_name: str = None):
         """Add a message to conversation history."""
         history = self._get_history(user_id)
+        
+        # For user messages, optionally prefix with their name for context
+        if role == "user" and user_name:
+            # Store the name so LLM knows who's talking
+            content = f"[{user_name} says]: {content}"
+        
         history.append({"role": role, "content": content})
         
         # Keep last 20 messages
         if len(history) > 20:
             self.conversation_history[user_id] = history[-20:]
     
-    async def _generate_response(self, user_id: int, text: str) -> str:
+    async def _generate_response(self, user_id: int, text: str, user_name: str = None) -> str:
         """Generate LLM response."""
-        self._add_to_history(user_id, "user", text)
+        self._add_to_history(user_id, "user", text, user_name)
         history = self._get_history(user_id)
         
         response = await self.llm.chat(history)
@@ -394,20 +421,20 @@ class MumbleVoiceBot:
         self._add_to_history(user_id, "assistant", response.content)
         return response.content
     
-    def _generate_response_sync(self, user_id: int, text: str) -> str:
+    def _generate_response_sync(self, user_id: int, text: str, user_name: str = None) -> str:
         """Generate LLM response synchronously."""
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 import concurrent.futures
                 future = asyncio.run_coroutine_threadsafe(
-                    self._generate_response(user_id, text), loop
+                    self._generate_response(user_id, text, user_name), loop
                 )
                 return future.result(timeout=35.0)
             else:
-                return loop.run_until_complete(self._generate_response(user_id, text))
+                return loop.run_until_complete(self._generate_response(user_id, text, user_name))
         except RuntimeError:
-            return asyncio.run(self._generate_response(user_id, text))
+            return asyncio.run(self._generate_response(user_id, text, user_name))
     
     # =========================================================================
     # Audio Processing
@@ -526,9 +553,23 @@ class MumbleVoiceBot:
             
             # Generate LLM response if available
             if self.llm:
+                # Add human-like thinking delay (300-800ms)
+                think_delay = random.uniform(0.3, 0.8)
+                
+                # Sometimes say a filler/acknowledgment before the real response
+                # This makes it feel like we're "thinking"
+                if random.random() < 0.3:  # 30% chance
+                    filler = random.choice([
+                        "hmm", "let me think", "oh", "well", "so", "uh"
+                    ])
+                    self._tts_queue.put((filler, self.voice_prompt))
+                    think_delay += 0.3  # Extra pause after filler
+                
+                time.sleep(think_delay)
+                
                 print(f"[LLM] Generating response...")
                 llm_start = time.time()
-                response = self._generate_response_sync(user_id, text)
+                response = self._generate_response_sync(user_id, text, user_name)
                 llm_time = time.time() - llm_start
                 print(f"[LLM] Response: \"{response}\" ({llm_time:.2f}s)")
                 
@@ -564,6 +605,7 @@ class MumbleVoiceBot:
         """Generate and play speech."""
         self._speaking.set()
         self._interrupted.clear()
+        self._last_interrupted_text = None  # Track what we were saying
         
         try:
             print(f"[TTS] Speaking: \"{text[:50]}{'...' if len(text) > 50 else ''}\"")
@@ -574,6 +616,8 @@ class MumbleVoiceBot:
                 if self._interrupted.is_set():
                     print("[TTS] Interrupted")
                     self.mumble.sound_output.clear_buffer()
+                    # Store what we were saying in case we want to reference it
+                    self._last_interrupted_text = text
                     break
                 
                 wav_float = wav_chunk.numpy().squeeze()
