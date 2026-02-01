@@ -21,8 +21,25 @@
           pkgs.stdenv.cc.cc.lib
           pkgs.zlib
         ];
+        
+        # Wrapper script that sets up environment and runs the bot
+        mumble-tts-bot = pkgs.writeShellScriptBin "mumble-tts-bot" ''
+          export LD_LIBRARY_PATH="${libPath}:$LD_LIBRARY_PATH"
+          export PATH="${pkgs.lib.makeBinPath [pkgs.ffmpeg pkgs.espeak-ng]}:$PATH"
+          cd "$(dirname "$0")/../share/mumble-tts-bot" 2>/dev/null || cd "${self}"
+          exec ${pkgs.uv}/bin/uv run python mumble_tts_bot.py "$@"
+        '';
       in
       {
+        # Runnable package
+        packages.default = mumble-tts-bot;
+        
+        # App for `nix run`
+        apps.default = {
+          type = "app";
+          program = "${mumble-tts-bot}/bin/mumble-tts-bot";
+        };
+        
         # Development shell - provides system deps, use uv for Python
         devShells.default = pkgs.mkShell {
           buildInputs = [
