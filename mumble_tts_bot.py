@@ -86,6 +86,7 @@ def get_best_device() -> str:
     
     Returns 'cuda' if NVIDIA GPU available, 'mps' for Apple Silicon,
     otherwise 'cpu'.
+
     """
     try:
         import torch
@@ -102,20 +103,6 @@ def get_best_device() -> str:
     except ImportError:
         print("[Device] PyTorch not available, defaulting to CPU")
         return 'cpu'
-
-
-# Common Whisper hallucination patterns (especially with whisper-tiny)
-HALLUCINATION_PATTERNS = [
-    r'^\.+$',  # Just dots/periods
-    r'^[\s\.\,\!\?]+$',  # Just punctuation
-    r'(.)\1{4,}',  # Same character repeated 5+ times
-    r'(\b\w+\b)(\s+\1){2,}',  # Same word repeated 3+ times
-    r'^(thanks for watching|subscribe|like and subscribe|thank you for watching)',  # YouTube artifacts
-    r'^(music|applause|laughter|silence)$',  # Sound descriptions
-    r'^\[.*\]$',  # Just bracketed text like [Music]
-    r'^you$',  # Common single-word hallucination
-]
-
 
 class MumbleTTSBot:
     """A Mumble bot that speaks text messages using LuxTTS."""
@@ -360,11 +347,6 @@ class MumbleTTSBot:
         # Too short is suspicious
         if len(text_lower) < 2:
             return True
-        
-        # Check against known hallucination patterns
-        for pattern in HALLUCINATION_PATTERNS:
-            if re.search(pattern, text_lower, re.IGNORECASE):
-                return True
         
         return False
     
