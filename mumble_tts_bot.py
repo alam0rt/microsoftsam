@@ -50,6 +50,37 @@ def strip_html(text: str) -> str:
     return re.sub(r'<[^>]+>', '', text)
 
 
+def extract_last_sentence(text: str) -> str:
+    """Extract the last complete sentence from text.
+    
+    This helps with garbled ASR output by just taking the last
+    recognizable sentence to speak back.
+    """
+    text = text.strip()
+    if not text:
+        return ""
+    
+    # Split on sentence-ending punctuation, keeping the punctuation
+    # Match .!? followed by space or end of string
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    
+    # Filter out empty strings and very short fragments
+    sentences = [s.strip() for s in sentences if s.strip() and len(s.strip()) > 2]
+    
+    if not sentences:
+        # No clear sentences, just return the whole thing (trimmed)
+        return text[:200] if len(text) > 200 else text
+    
+    # Return the last sentence
+    last = sentences[-1]
+    
+    # If it doesn't end with punctuation, add a period
+    if not re.search(r'[.!?]$', last):
+        last = last + '.'
+    
+    return last
+
+
 # Common Whisper hallucination patterns (especially with whisper-tiny)
 HALLUCINATION_PATTERNS = [
     r'^\.+$',  # Just dots/periods
@@ -102,12 +133,13 @@ class MumbleTTSBot:
         self.speech_active_until = {}  # user_id -> timestamp when speech hold expires
         self.last_transcription_time = {}  # user_id -> timestamp of last incremental transcription
         self.speech_hold_duration = 1.2  # seconds to wait after speech stops before final transcription
+        self.mimic_hold_duration = 0.6  # shorter hold for mimic mode - respond quickly like a child
         self.min_speech_duration = 0.8  # minimum seconds of audio to transcribe (shorter = more hallucinations)
         self.max_speech_duration = 30.0  # maximum seconds to buffer before forced transcription
         self.incremental_interval = 4.0  # transcribe every N seconds during ongoing speech
         
-        # Mimic mode: capture user's voice and speak it back to them
-        self.mimic_pending = {}  # user_id -> True if waiting for speech to mimic
+        # Mimic mode: capture user's voice and speak it back to them (like an annoying child)
+        self.mimic_pending = {}  # user_id -> True if actively mimicking this user
         
         # Initialize TTS
         print(f"Loading LuxTTS model on {device}...")
@@ -189,7 +221,7 @@ class MumbleTTSBot:
             if hasattr(message, 'actor'):
                 user_id = message.actor
                 self.mimic_pending[user_id] = True
-                print(f"[Mimic] Now mimicking {sender}! Say @stop to stop.")
+                print(f"[Mimic] Now mimicking {sender} (session {user_id})! Say @stop to stop.")
             return
         
         # Check for @stop command
@@ -238,14 +270,25 @@ class MumbleTTSBot:
         # Check if this chunk contains speech (above threshold)
         if rms > self.asr_threshold:
             # Speech detected - add to buffer and extend hold time
+            # Use shorter hold time in mimic mode for faster response
+            hold_time = self.mimic_hold_duration if self.mimic_pending.get(user_id) else self.speech_hold_duration
             self.audio_buffers[user_id].append(sound_chunk.pcm)
-            self.speech_active_until[user_id] = current_time + self.speech_hold_duration
+            self.speech_active_until[user_id] = current_time + hold_time
             
             buffer_duration = self._get_buffer_duration(user_id)
             time_since_last = current_time - self.last_transcription_time[user_id]
             
+            # If mimic mode is active, skip incremental ASR - we'll process on speech end
+            if self.mimic_pending.get(user_id):
+                # Force process if we've accumulated too much (max 15s for mimic)
+                if buffer_duration >= 15.0:
+                    if self.debug_rms:
+                        print()
+                    print(f"[Mimic] Max buffer reached, processing...")
+                    self._mimic_user(user, user_id)
+                # Otherwise just accumulate
             # Incremental transcription: transcribe periodically during ongoing speech
-            if buffer_duration >= self.min_speech_duration and time_since_last >= self.incremental_interval:
+            elif buffer_duration >= self.min_speech_duration and time_since_last >= self.incremental_interval:
                 if self.debug_rms:
                     print()  # Newline after RMS display
                 self._transcribe_buffer(user, user_id, incremental=True)
@@ -262,19 +305,19 @@ class MumbleTTSBot:
             if current_time < self.speech_active_until[user_id]:
                 self.audio_buffers[user_id].append(sound_chunk.pcm)
             elif self.audio_buffers[user_id]:
-                # Hold period expired and we have buffered audio
+                # Hold period expired and we have buffered audio - user stopped speaking
                 if self.debug_rms:
                     print()  # Newline after RMS display
                 
-                # Check if this user has mimic pending
+                # Check if this user has mimic mode active
                 if self.mimic_pending.get(user_id):
-                    # Only process if we have enough audio, otherwise keep waiting
+                    # Mimic mode: repeat what they said back to them (like an annoying child)
                     buffer_duration = self._get_buffer_duration(user_id)
-                    if buffer_duration >= 3.0:
+                    if buffer_duration >= 1.5:  # Need at least 1.5s for decent clone
                         self._mimic_user(user, user_id)
                     else:
-                        # Not enough audio yet - extend hold time to keep collecting
-                        self.speech_active_until[user_id] = current_time + self.speech_hold_duration
+                        # Too short - just discard and wait for next utterance
+                        self.audio_buffers[user_id] = []
                 else:
                     # Normal final transcription
                     self._transcribe_buffer(user, user_id, incremental=False)
@@ -406,6 +449,23 @@ class MumbleTTSBot:
         user_name = user.get('name', 'Unknown')
         buffer_duration = self._get_buffer_duration(user_id)
         
+        # Cap at 25 seconds to avoid Whisper's 30s limit
+        max_mimic_duration = 25.0
+        if buffer_duration > max_mimic_duration:
+            print(f"[Mimic] Trimming {buffer_duration:.1f}s to {max_mimic_duration}s")
+            # Keep only the last max_mimic_duration seconds
+            bytes_to_keep = int(max_mimic_duration * 48000 * 2)
+            total_bytes = sum(len(chunk) for chunk in self.audio_buffers[user_id])
+            bytes_to_skip = total_bytes - bytes_to_keep
+            
+            # Skip chunks until we've skipped enough
+            skipped = 0
+            while self.audio_buffers[user_id] and skipped < bytes_to_skip:
+                chunk = self.audio_buffers[user_id].pop(0)
+                skipped += len(chunk)
+            
+            buffer_duration = self._get_buffer_duration(user_id)
+        
         print(f"[Mimic] Processing {buffer_duration:.1f}s of audio from {user_name}...")
         
         # Concatenate all PCM chunks
@@ -437,13 +497,18 @@ class MumbleTTSBot:
         # Step 1: Transcribe the audio to get the text
         try:
             result = self.tts.transcriber(audio_16k_normalized)
-            text = result.get('text', '').strip()
+            full_text = result.get('text', '').strip()
             
-            if not text or self._is_hallucination(text):
+            if not full_text or self._is_hallucination(full_text):
                 print(f"[Mimic] Could not transcribe speech from {user_name}")
                 return
-                
-            print(f"[Mimic] {user_name} said: \"{text}\"")
+            
+            # Extract just the last sentence for cleaner TTS
+            text = extract_last_sentence(full_text)
+            
+            print(f"[Mimic] {user_name} said: \"{full_text}\"")
+            if text != full_text:
+                print(f"[Mimic] Using last sentence: \"{text}\"")
             
         except Exception as e:
             print(f"[Mimic] Transcription error: {e}")
