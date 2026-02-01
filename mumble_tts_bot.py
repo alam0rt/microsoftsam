@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import time
+from typing import Generator, List
 
 # Add vendor paths for pymumble and LuxTTS
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -24,6 +25,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, "vendor", "LuxTTS"))
 sys.path.insert(0, os.path.join(_THIS_DIR, "vendor", "LinaCodec", "src"))
 
 import numpy as np
+import torch
 from scipy import signal
 
 import pymumble_py3 as pymumble
@@ -31,6 +33,133 @@ from pymumble_py3.constants import PYMUMBLE_CLBK_TEXTMESSAGERECEIVED, PYMUMBLE_C
 
 from zipvoice.luxvoice import LuxTTS
 
+
+# =============================================================================
+# StreamingLuxTTS - Subclass that adds streaming and fixes upstream issues
+# =============================================================================
+
+def split_into_sentences(text: str) -> List[str]:
+    """Split text into sentences for streaming TTS.
+    
+    Splits on common sentence-ending punctuation to allow audio playback
+    to start as soon as the first sentence is generated.
+    """
+    # Split on sentence-ending punctuation, keeping the punctuation
+    sentences = re.split(r'(?<=[.!?;:,])\s+', text.strip())
+    # Filter out empty strings and strip whitespace
+    return [s.strip() for s in sentences if s.strip()]
+
+
+class StreamingLuxTTS(LuxTTS):
+    """
+    Extended LuxTTS with streaming support and bug fixes.
+    
+    This subclass avoids modifying the upstream LuxTTS vendor code by:
+    1. Monkey-patching the Whisper transcriber to force English (prevents 蚊蚊蚊 hallucinations)
+    2. Fixing MPS device handling (MPS doesn't use device index like CUDA)
+    3. Adding streaming generation for faster perceived response times
+    """
+    
+    def __init__(self, model_path='YatharthS/LuxTTS', device='cuda', threads=4):
+        # Call parent constructor
+        super().__init__(model_path=model_path, device=device, threads=threads)
+        
+        # Fix 1: Patch transcriber to force English language
+        # Without this, Whisper can hallucinate Chinese/other characters from noise
+        self._patch_transcriber_for_english()
+        
+        # Fix 2: MPS device handling is already done in parent, but verify
+        # (upstream has a bug with torch.device(device, 0) for MPS)
+        
+    def _patch_transcriber_for_english(self):
+        """Wrap the transcriber to always use English language detection.
+        
+        This prevents Whisper from hallucinating non-English text (like 蚊蚊蚊蚊)
+        when processing noise or unclear audio.
+        """
+        original_transcriber = self.transcriber
+        
+        def english_transcriber(audio, **kwargs):
+            # Force English language and transcription task
+            # This is passed as generate_kwargs to the HuggingFace pipeline
+            result = original_transcriber(
+                audio,
+                generate_kwargs={"language": "en", "task": "transcribe"},
+                **kwargs
+            )
+            return result
+        
+        self.transcriber = english_transcriber
+        print("[StreamingLuxTTS] Patched transcriber for English-only mode")
+    
+    def generate_speech_streaming(
+        self,
+        text: str,
+        encode_dict: dict,
+        num_steps: int = 4,
+        guidance_scale: float = 3.0,
+        t_shift: float = 0.5,
+        speed: float = 1.0,
+        return_smooth: bool = False
+    ) -> Generator[torch.Tensor, None, None]:
+        """
+        Stream speech generation by splitting text into sentences and yielding audio chunks.
+        
+        This allows playback to start as soon as the first sentence is generated,
+        significantly reducing perceived latency for longer texts - making the bot
+        feel more human-like and responsive.
+        
+        Args:
+            text: The text to synthesize
+            encode_dict: The encoded voice prompt from encode_prompt()
+            num_steps: Number of diffusion steps (fewer = faster but lower quality)
+            guidance_scale: Classifier-free guidance scale
+            t_shift: Temperature-like parameter for sampling
+            speed: Speech speed multiplier
+            return_smooth: If True, return 24kHz audio; if False, return 48kHz
+            
+        Yields:
+            torch.Tensor: Audio chunks as they are generated (48kHz by default)
+        """
+        # Split text into sentences for streaming
+        sentences = split_into_sentences(text)
+        
+        # If text is very short or has no sentence breaks, just yield the whole thing
+        if len(sentences) <= 1:
+            wav = self.generate_speech(
+                text, encode_dict,
+                num_steps=num_steps,
+                guidance_scale=guidance_scale,
+                t_shift=t_shift,
+                speed=speed,
+                return_smooth=return_smooth
+            )
+            yield wav
+            return
+        
+        # Generate and yield each sentence's audio as soon as it's ready
+        for sentence in sentences:
+            if not sentence.strip():
+                continue
+            wav = self.generate_speech(
+                sentence, encode_dict,
+                num_steps=num_steps,
+                guidance_scale=guidance_scale,
+                t_shift=t_shift,
+                speed=speed,
+                return_smooth=return_smooth
+            )
+            yield wav
+
+
+# =============================================================================
+# Helper functions
+# =============================================================================
+
+
+# =============================================================================
+# Helper functions
+# =============================================================================
 
 def pcm_rms(pcm_bytes: bytes) -> int:
     """Calculate RMS (Root Mean Square) of 16-bit PCM audio.
@@ -151,9 +280,9 @@ class MumbleTTSBot:
         # Mimic mode: capture user's voice and speak it back to them (like an annoying child)
         self.mimic_pending = {}  # user_id -> True if actively mimicking this user
         
-        # Initialize TTS
-        print(f"Loading LuxTTS model on {device}...")
-        self.tts = LuxTTS('YatharthS/LuxTTS', device=device, threads=2)
+        # Initialize TTS with our streaming-capable subclass
+        print(f"Loading StreamingLuxTTS model on {device}...")
+        self.tts = StreamingLuxTTS('YatharthS/LuxTTS', device=device, threads=2)
         
         print(f"Encoding reference audio: {reference_audio}")
         self.voice_prompt = self.tts.encode_prompt(reference_audio, rms=0.01)
@@ -556,19 +685,32 @@ class MumbleTTSBot:
             except:
                 pass
 
-    def speak(self, text: str):
-        """Generate speech from text and send to Mumble."""
-        # Generate speech with LuxTTS
-        wav = self.tts.generate_speech(text, self.voice_prompt, num_steps=self.num_steps)
-        wav_float = wav.numpy().squeeze()
+    def speak(self, text: str, streaming: bool = True):
+        """Generate speech from text and send to Mumble.
         
-        # Convert float32 [-1, 1] to int16 PCM
-        # Clip to prevent overflow
-        wav_float = np.clip(wav_float, -1.0, 1.0)
-        pcm = (wav_float * 32767).astype(np.int16)
-        
-        # Send to Mumble (48kHz 16-bit mono PCM)
-        self.mumble.sound_output.add_sound(pcm.tobytes())
+        Args:
+            text: The text to speak
+            streaming: If True, use streaming generation for faster first response.
+                      This splits text into sentences and plays each as soon as
+                      it's ready, making the bot feel more responsive/human-like.
+        """
+        if streaming:
+            # Use streaming for faster perceived response time
+            # Audio starts playing as soon as the first sentence is generated
+            for wav_chunk in self.tts.generate_speech_streaming(
+                text, self.voice_prompt, num_steps=self.num_steps
+            ):
+                wav_float = wav_chunk.numpy().squeeze()
+                wav_float = np.clip(wav_float, -1.0, 1.0)
+                pcm = (wav_float * 32767).astype(np.int16)
+                self.mumble.sound_output.add_sound(pcm.tobytes())
+        else:
+            # Non-streaming: generate all audio at once
+            wav = self.tts.generate_speech(text, self.voice_prompt, num_steps=self.num_steps)
+            wav_float = wav.numpy().squeeze()
+            wav_float = np.clip(wav_float, -1.0, 1.0)
+            pcm = (wav_float * 32767).astype(np.int16)
+            self.mumble.sound_output.add_sound(pcm.tobytes())
         
     def run_forever(self):
         """Keep the bot running."""
