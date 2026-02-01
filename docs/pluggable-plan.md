@@ -1,46 +1,37 @@
-# Modular Mumble Voice Bot Architecture
+# Mumble Voice Bot - LLM Thinking Module Integration
 
 ## Overview
 
-Transform the Mumble TTS bot into a modular voice assistant with pluggable components for:
-1. **Speech-to-Text (STT)** - Whisper via OpenAI-compatible API
-2. **Language Model (LLM)** - Any OpenAI-compatible chat endpoint
-3. **Text-to-Speech (TTS)** - Qwen3-TTS via vLLM-Omni OpenAI-compatible API
+Add an LLM "Thinking" module to the existing Mumble TTS bot to enable conversational AI capabilities. The bot already has:
+- ✅ **Speech-to-Text (STT)** - Whisper (built-in)
+- ✅ **Text-to-Speech (TTS)** - LuxTTS (built-in, 150x realtime, voice cloning)
+- 🚧 **Language Model (LLM)** - **NEW: Any OpenAI-compatible chat endpoint**
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Mumble    │────▶│   Whisper   │────▶│     LLM     │────▶│  Qwen3-TTS  │
-│   Audio     │     │    (STT)    │     │  (Thinking) │     │   (Voice)   │
+│   Mumble    │────▶│   Whisper   │────▶│     LLM     │────▶│   LuxTTS    │
+│   Audio     │     │  (built-in) │     │  (Thinking) │     │ (built-in)  │
 └─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
       ▲                                                            │
       └────────────────────────────────────────────────────────────┘
                               Audio Response
 ```
 
-## Architecture
+## Current Stack
 
-### Component Interfaces
+### Whisper (STT) - Already Integrated
+- Local Whisper model for speech-to-text
+- Processes incoming Mumble audio
 
-All components communicate via OpenAI-compatible HTTP APIs, making them easily swappable.
+### LuxTTS (TTS) - Already Integrated
+- Lightweight zipvoice-based TTS (~1GB VRAM)
+- 150x realtime speed on GPU, realtime on CPU
+- High-quality 48kHz voice cloning
+- Reference audio for voice matching
 
-#### 1. STT Interface (Whisper)
-```
-POST /v1/audio/transcriptions
-Content-Type: multipart/form-data
+## New Component: LLM Thinking Module
 
-file: <audio_file>
-model: "whisper-1"  # or specific model name
-language: "en"      # optional
-```
-
-**Compatible Backends:**
-- OpenAI Whisper API
-- [faster-whisper-server](https://github.com/fedirz/faster-whisper-server)
-- [whisper.cpp server](https://github.com/ggerganov/whisper.cpp)
-- vLLM with Whisper support
-- LocalAI
-
-#### 2. LLM Interface (Chat Completions)
+### LLM Interface (Chat Completions)
 ```
 POST /v1/chat/completions
 Content-Type: application/json
@@ -62,28 +53,6 @@ Content-Type: application/json
 - LocalAI
 - LiteLLM (proxy to any backend)
 
-#### 3. TTS Interface (Qwen3-TTS via vLLM-Omni)
-```
-POST /v1/audio/speech
-Content-Type: application/json
-
-{
-  "input": "<text to speak>",
-  "voice": "Vivian",
-  "model": "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
-  "task_type": "CustomVoice",
-  "language": "Auto",
-  "instructions": "<emotional/tonal guidance from LLM>"
-}
-```
-
-**Compatible Backends:**
-- vLLM-Omni (Qwen3-TTS)
-- OpenAI TTS API
-- qwen-tts demo server
-- Coqui TTS
-- Piper TTS
-
 ---
 
 ## Configuration
@@ -92,36 +61,21 @@ Content-Type: application/json
 
 ```yaml
 # config.yaml
-stt:
-  endpoint: "http://localhost:8001/v1/audio/transcriptions"
-  model: "whisper-large-v3"
-  api_key: "${STT_API_KEY}"  # optional
-  language: "en"  # or "auto"
-
 llm:
   endpoint: "http://localhost:8002/v1/chat/completions"
-  model: "Qwen/Qwen3-32B"
+  model: "Qwen/Qwen3-32B"  # or any OpenAI-compatible model
   api_key: "${LLM_API_KEY}"
   system_prompt: |
     You are a helpful voice assistant in a Mumble voice chat.
-    Keep responses concise and conversational.
-    
-    When responding, also suggest a tone/emotion for the TTS.
-    Format your response as:
-    [tone: <emotion>]
-    <your response text>
-    
-    Example tones: cheerful, serious, excited, calm, sympathetic
+    Keep responses concise and conversational (1-3 sentences).
+    Be friendly but not overly verbose - this is voice, not text.
 
 tts:
-  endpoint: "http://localhost:8003/v1/audio/speech"
-  model: "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
-  api_key: "${TTS_API_KEY}"
-  voice: "Vivian"
-  task_type: "CustomVoice"  # or "VoiceDesign", "Base"
-  # For voice cloning (task_type: Base)
-  ref_audio: null  # path or URL to reference audio
-  ref_text: null   # transcript of reference audio
+  # LuxTTS settings (built-in)
+  ref_audio: "voice_reference.wav"  # Reference audio for voice cloning
+  ref_duration: 5                    # Seconds of reference to use
+  num_steps: 4                       # Quality vs speed tradeoff (3-4 recommended)
+  speed: 1.0                         # Playback speed
 
 mumble:
   host: "localhost"
@@ -136,129 +90,128 @@ bot:
   wake_word: null  # e.g., "hey bot" - if null, responds to all speech
   silence_threshold_ms: 1500  # silence before processing speech
   max_recording_ms: 30000     # max speech duration
-  response_prefix: null       # e.g., "Here's what I think:"
 ```
 
 ---
 
 ## Implementation Plan
 
-### Phase 1: Refactor Core Architecture
+### Phase 1: LLM Provider Interface
 
-#### 1.1 Create Abstract Interfaces
+#### 1.1 Create LLM Interface
 
 ```python
-# interfaces/stt.py
+# interfaces/llm.py
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 @dataclass
-class TranscriptionResult:
-    text: str
-    language: str | None
-    confidence: float | None
-
-class STTProvider(ABC):
-    @abstractmethod
-    async def transcribe(self, audio: bytes, sample_rate: int) -> TranscriptionResult:
-        """Transcribe audio to text."""
-        pass
-
-# interfaces/llm.py
-@dataclass
 class LLMResponse:
     content: str
-    tone: str | None  # extracted tone hint for TTS
+    model: str | None = None
+    usage: dict | None = None
 
 class LLMProvider(ABC):
     @abstractmethod
     async def chat(self, messages: list[dict], context: dict | None = None) -> LLMResponse:
         """Generate response from conversation."""
         pass
-
-# interfaces/tts.py
-@dataclass
-class SpeechResult:
-    audio: bytes
-    sample_rate: int
-    format: str  # "wav", "mp3", etc.
-
-class TTSProvider(ABC):
-    @abstractmethod
-    async def synthesize(self, text: str, voice: str | None = None, 
-                         instructions: str | None = None) -> SpeechResult:
-        """Convert text to speech."""
-        pass
 ```
 
-#### 1.2 Implement OpenAI-Compatible Providers
+#### 1.2 Implement OpenAI-Compatible Provider
 
 ```python
-# providers/openai_stt.py
-class OpenAIWhisperSTT(STTProvider):
-    def __init__(self, endpoint: str, model: str, api_key: str | None = None):
-        self.endpoint = endpoint
-        self.model = model
-        self.api_key = api_key
-    
-    async def transcribe(self, audio: bytes, sample_rate: int) -> TranscriptionResult:
-        # POST to /v1/audio/transcriptions
-        ...
-
 # providers/openai_llm.py
+import httpx
+
 class OpenAIChatLLM(LLMProvider):
     def __init__(self, endpoint: str, model: str, api_key: str | None = None,
                  system_prompt: str | None = None):
-        ...
+        self.endpoint = endpoint
+        self.model = model
+        self.api_key = api_key
+        self.system_prompt = system_prompt
     
     async def chat(self, messages: list[dict], context: dict | None = None) -> LLMResponse:
-        # POST to /v1/chat/completions
-        # Parse response for [tone: ...] hints
-        ...
-
-# providers/openai_tts.py
-class OpenAITTS(TTSProvider):
-    """Works with OpenAI TTS API and vLLM-Omni Qwen3-TTS."""
-    
-    def __init__(self, endpoint: str, model: str, api_key: str | None = None,
-                 voice: str = "Vivian", task_type: str = "CustomVoice"):
-        ...
-    
-    async def synthesize(self, text: str, voice: str | None = None,
-                         instructions: str | None = None) -> SpeechResult:
-        # POST to /v1/audio/speech
-        # Include instructions for Qwen3-TTS emotional control
-        ...
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        
+        # Prepend system prompt if configured
+        full_messages = []
+        if self.system_prompt:
+            full_messages.append({"role": "system", "content": self.system_prompt})
+        full_messages.extend(messages)
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                self.endpoint,
+                headers=headers,
+                json={
+                    "model": self.model,
+                    "messages": full_messages,
+                },
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+        
+        return LLMResponse(
+            content=data["choices"][0]["message"]["content"],
+            model=data.get("model"),
+            usage=data.get("usage"),
+        )
 ```
 
-#### 1.3 Create Voice Pipeline
+### Phase 2: Voice Pipeline Integration
+
+#### 2.1 Create Voice Pipeline
 
 ```python
 # pipeline.py
+from dataclasses import dataclass
+
+@dataclass
+class PipelineConfig:
+    wake_word: str | None = None
+    silence_threshold_ms: int = 1500
+    max_recording_ms: int = 30000
+
 class VoicePipeline:
-    def __init__(self, stt: STTProvider, llm: LLMProvider, tts: TTSProvider,
-                 config: PipelineConfig):
-        self.stt = stt
-        self.llm = llm
-        self.tts = tts
+    def __init__(self, whisper, llm: LLMProvider, luxtts, config: PipelineConfig):
+        self.whisper = whisper      # Existing Whisper integration
+        self.llm = llm              # New LLM provider
+        self.luxtts = luxtts        # Existing LuxTTS integration
         self.config = config
         self.conversation_history: list[dict] = []
     
-    async def process_audio(self, audio: bytes, sample_rate: int) -> SpeechResult:
+    async def process_audio(self, audio: bytes, sample_rate: int) -> bytes | None:
         """Full pipeline: audio -> transcription -> LLM -> speech."""
         
-        # 1. Transcribe
-        transcription = await self.stt.transcribe(audio, sample_rate)
+        # 1. Transcribe with built-in Whisper
+        transcription = self.whisper.transcribe(audio, sample_rate)
+        
+        if not transcription.text.strip():
+            return None
         
         # 2. Check wake word (if configured)
-        if self.config.wake_word and not self._has_wake_word(transcription.text):
-            return None
+        if self.config.wake_word:
+            if self.config.wake_word.lower() not in transcription.text.lower():
+                return None
+            # Remove wake word from text
+            text = transcription.text.lower().replace(self.config.wake_word.lower(), "").strip()
+        else:
+            text = transcription.text
         
         # 3. Build messages with history
         self.conversation_history.append({
             "role": "user",
-            "content": transcription.text
+            "content": text
         })
+        
+        # Keep last 10 exchanges to avoid context overflow
+        if len(self.conversation_history) > 20:
+            self.conversation_history = self.conversation_history[-20:]
         
         # 4. Get LLM response
         llm_response = await self.llm.chat(self.conversation_history)
@@ -268,18 +221,22 @@ class VoicePipeline:
             "content": llm_response.content
         })
         
-        # 5. Synthesize speech with tone guidance
-        speech = await self.tts.synthesize(
+        # 5. Synthesize speech with LuxTTS
+        audio_output = self.luxtts.generate_speech(
             text=llm_response.content,
-            instructions=llm_response.tone  # Pass tone to Qwen3-TTS
+            encoded_prompt=self.luxtts.encoded_voice,  # Pre-loaded voice
         )
         
-        return speech
+        return audio_output
+    
+    def clear_history(self):
+        """Clear conversation history."""
+        self.conversation_history = []
 ```
 
-### Phase 2: Mumble Integration
+### Phase 3: Mumble Bot Integration
 
-#### 2.1 Refactor MumbleBot
+#### 3.1 Update MumbleBot to Use Pipeline
 
 ```python
 # mumble_bot.py
@@ -302,113 +259,82 @@ class MumbleVoiceBot:
         if self.audio_buffer.silence_detected(user.name):
             complete_audio = self.audio_buffer.get_and_clear(user.name)
             
-            # Process through pipeline
+            # Process through pipeline (Whisper -> LLM -> LuxTTS)
             response = await self.pipeline.process_audio(
                 complete_audio, 
                 sample_rate=48000
             )
             
             if response:
-                await self.play_audio(response.audio, response.sample_rate)
+                await self.play_audio(response)
     
-    async def play_audio(self, audio: bytes, sample_rate: int):
+    async def play_audio(self, audio: bytes):
         """Play audio to Mumble channel."""
         ...
 ```
 
-### Phase 3: Service Orchestration
+### Phase 4: LLM Server Setup
 
-#### 3.1 Docker Compose Setup
+#### 4.1 Running a Local LLM
+
+**Option A: Ollama (Easiest)**
+```bash
+# Install Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Pull a model
+ollama pull llama3.2:3b  # Small, fast
+ollama pull qwen2.5:7b   # Better quality
+
+# Ollama automatically exposes OpenAI-compatible API at http://localhost:11434/v1
+```
+
+**Option B: vLLM (Best for GPU)**
+```bash
+# Run vLLM server
+vllm serve Qwen/Qwen2.5-7B-Instruct --port 8002
+
+# Or with Docker
+docker run --gpus all -p 8002:8000 \
+  vllm/vllm-openai:latest \
+  --model Qwen/Qwen2.5-7B-Instruct
+```
+
+**Option C: llama.cpp (CPU-friendly)**
+```bash
+# Build and run llama.cpp server
+./llama-server -m model.gguf --port 8002 --host 0.0.0.0
+```
+
+#### 4.2 Using Cloud APIs
 
 ```yaml
-# docker-compose.yaml
-version: '3.8'
+# config.yaml for OpenAI
+llm:
+  endpoint: "https://api.openai.com/v1/chat/completions"
+  model: "gpt-4o-mini"
+  api_key: "${OPENAI_API_KEY}"
 
-services:
-  whisper:
-    image: fedirz/faster-whisper-server:latest
-    ports:
-      - "8001:8000"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - capabilities: [gpu]
-
-  llm:
-    image: vllm/vllm-openai:latest
-    command: --model Qwen/Qwen3-8B --port 8000
-    ports:
-      - "8002:8000"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - capabilities: [gpu]
-
-  tts:
-    build:
-      context: .
-      dockerfile: Dockerfile.tts
-    command: >
-      vllm-omni serve Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice
-      --host 0.0.0.0 --port 8000 --omni
-    ports:
-      - "8003:8000"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - capabilities: [gpu]
-
-  bot:
-    build: .
-    depends_on:
-      - whisper
-      - llm
-      - tts
-    environment:
-      - STT_ENDPOINT=http://whisper:8000
-      - LLM_ENDPOINT=http://llm:8000
-      - TTS_ENDPOINT=http://tts:8000
-    volumes:
-      - ./config.yaml:/app/config.yaml
+# config.yaml for Anthropic (via LiteLLM proxy)
+llm:
+  endpoint: "http://localhost:4000/v1/chat/completions"
+  model: "claude-3-haiku"
+  api_key: "${ANTHROPIC_API_KEY}"
 ```
+        
+### Phase 5: Advanced Features (Future)
 
-#### 3.2 Nix Flake Updates
-
-Add shell options for running individual services:
-
-```nix
-# flake.nix additions
-devShells.whisper = mkShell { ... };  # faster-whisper-server
-devShells.llm = mkShell { ... };      # vLLM for LLM
-devShells.tts = mkShell { ... };      # vLLM-Omni for TTS
-```
-
-### Phase 4: Advanced Features
-
-#### 4.1 Streaming Support
-
+#### 5.1 Streaming Responses
 - Stream LLM responses token-by-token
-- Start TTS as soon as first sentence is complete
+- Start TTS synthesis as soon as first sentence is complete
 - Reduce perceived latency
 
-#### 4.2 Voice Cloning Mode
-
-Use Qwen3-TTS Base model to clone a user's voice:
-1. Record reference audio from user
-2. Store voice profile
-3. Use cloned voice for responses to that user
-
-#### 4.3 Multi-User Support
-
+#### 5.2 Multi-User Support
 - Track conversation history per user
-- Different voice/persona per user
+- Different system prompts per user
 - Concurrent processing
 
-#### 4.4 Interrupt Handling
-
+#### 5.3 Interrupt Handling
 - Detect when user starts speaking during bot response
 - Stop TTS playback
 - Process new input
@@ -425,14 +351,10 @@ mumble_voice_bot/
 ├── pipeline.py             # VoicePipeline orchestration
 ├── interfaces/
 │   ├── __init__.py
-│   ├── stt.py              # STT abstract interface
-│   ├── llm.py              # LLM abstract interface
-│   └── tts.py              # TTS abstract interface
+│   └── llm.py              # LLM abstract interface
 ├── providers/
 │   ├── __init__.py
-│   ├── openai_stt.py       # OpenAI-compatible Whisper
-│   ├── openai_llm.py       # OpenAI-compatible Chat
-│   └── openai_tts.py       # OpenAI-compatible TTS (vLLM-Omni)
+│   └── openai_llm.py       # OpenAI-compatible Chat
 ├── mumble/
 │   ├── __init__.py
 │   ├── bot.py              # MumbleVoiceBot
@@ -440,56 +362,51 @@ mumble_voice_bot/
 │   └── connection.py       # Mumble connection handling
 └── utils/
     ├── __init__.py
-    ├── audio.py            # Audio format conversion
-    └── tone_parser.py      # Extract tone hints from LLM response
+    └── audio.py            # Audio format conversion
 ```
 
 ---
 
 ## API Examples
 
-### Whisper Transcription
+### LLM Chat Request
 ```bash
-curl -X POST http://localhost:8001/v1/audio/transcriptions \
-  -F "file=@audio.wav" \
-  -F "model=whisper-large-v3"
-```
-
-### LLM Chat
-```bash
-curl -X POST http://localhost:8002/v1/chat/completions \
+curl -X POST http://localhost:11434/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "Qwen/Qwen3-8B",
+    "model": "llama3.2:3b",
     "messages": [
-      {"role": "system", "content": "You are a helpful assistant. Include [tone: emotion] in responses."},
-      {"role": "user", "content": "Tell me a joke"}
+      {"role": "system", "content": "You are a helpful voice assistant. Keep responses concise."},
+      {"role": "user", "content": "What is the weather like today?"}
     ]
   }'
 ```
 
-### Qwen3-TTS Speech
-```bash
-curl -X POST http://localhost:8003/v1/audio/speech \
-  -H "Content-Type: application/json" \
-  -d '{
-    "input": "Why did the chicken cross the road? To get to the other side!",
-    "voice": "Vivian",
-    "instructions": "cheerful and playful",
-    "task_type": "CustomVoice"
-  }' --output response.wav
+### LuxTTS Usage (Built-in)
+```python
+from zipvoice.luxvoice import LuxTTS
+
+# Initialize once at startup
+lux_tts = LuxTTS('YatharthS/LuxTTS', device='cuda')
+
+# Pre-encode voice reference
+encoded_voice = lux_tts.encode_prompt('voice_reference.wav', rms=0.01)
+
+# Generate speech from LLM response
+audio = lux_tts.generate_speech(llm_response.content, encoded_voice, num_steps=4)
 ```
 
 ---
 
 ## Migration Path
 
-1. **Keep existing bot functional** during refactor
-2. **Extract interfaces** from current implementation
-3. **Implement OpenAI providers** alongside existing code
-4. **Add configuration system**
-5. **Switch to new pipeline** via feature flag
-6. **Remove legacy code** once stable
+1. **Keep existing bot functional** during development
+2. **Add LLM interface** as new module
+3. **Implement OpenAI provider**
+4. **Create pipeline** that wraps existing Whisper + LuxTTS
+5. **Add configuration** for LLM endpoint
+6. **Test with Ollama** locally
+7. **Deploy** with cloud LLM or self-hosted vLLM
 
 ---
 
@@ -499,12 +416,12 @@ curl -X POST http://localhost:8003/v1/audio/speech \
 [project]
 dependencies = [
     "pymumble>=1.0",
-    "httpx>=0.27",           # Async HTTP client
+    "httpx>=0.27",           # Async HTTP client for LLM API
     "pydantic>=2.0",         # Config validation
     "pyyaml>=6.0",           # Config files
     "numpy>=1.26",
     "soundfile>=0.12",
-    "librosa>=0.10",         # Audio processing
+    # Existing dependencies for Whisper and LuxTTS
 ]
 
 [project.optional-dependencies]
@@ -518,9 +435,8 @@ dev = [
 
 ## Success Metrics
 
-- [ ] Transcription latency < 500ms for 5s audio
-- [ ] LLM response latency < 2s
-- [ ] TTS synthesis latency < 1s
-- [ ] End-to-end latency < 4s
-- [ ] Support for 3+ concurrent users
-- [ ] Zero-downtime component swapping
+- [ ] LLM response latency < 2s (local) / < 1s (cloud)
+- [ ] End-to-end latency < 4s (speech in -> speech out)
+- [ ] Conversation context maintained across turns
+- [ ] Wake word detection working (optional)
+- [ ] Graceful fallback when LLM unavailable

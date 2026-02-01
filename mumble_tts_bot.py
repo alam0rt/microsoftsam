@@ -415,6 +415,139 @@ class MumbleTTSBot:
                 PYMUMBLE_CLBK_SOUNDRECEIVED,
                 self.on_sound_received
             )
+    
+    def _init_llm(
+        self,
+        endpoint: str = None,
+        model: str = None,
+        api_key: str = None,
+        system_prompt: str = None,
+        config_file: str = None,
+    ):
+        """Initialize the LLM provider for chat mode.
+        
+        Configuration priority:
+        1. Command-line arguments (endpoint, model, etc.)
+        2. Config file (config.yaml)
+        3. Default values
+        """
+        # Try to load config file
+        config = None
+        if config_file or os.path.exists("config.yaml"):
+            try:
+                config = load_config(config_file)
+                print(f"[LLM] Loaded config from {config_file or 'config.yaml'}")
+            except Exception as e:
+                print(f"[LLM] Failed to load config: {e}")
+        
+        # Determine final values (CLI args override config)
+        final_endpoint = endpoint
+        final_model = model
+        final_api_key = api_key
+        final_system_prompt = system_prompt
+        
+        if config:
+            if not final_endpoint:
+                final_endpoint = config.llm.endpoint
+            if not final_model:
+                final_model = config.llm.model
+            if not final_api_key:
+                final_api_key = config.llm.api_key
+            if not final_system_prompt:
+                final_system_prompt = config.llm.system_prompt
+            # Also use config for conversation timeout
+            if hasattr(config, 'bot') and config.bot.conversation_timeout:
+                self.conversation_timeout = config.bot.conversation_timeout
+        
+        # Apply defaults
+        if not final_endpoint:
+            final_endpoint = "http://localhost:11434/v1/chat/completions"
+        if not final_model:
+            final_model = "llama3.2:3b"
+        if not final_system_prompt:
+            final_system_prompt = (
+                "You are a helpful voice assistant in a Mumble voice chat. "
+                "Keep responses concise and conversational (1-3 sentences). "
+                "Be friendly but not overly verbose - this is voice, not text."
+            )
+        
+        # Create LLM provider
+        self.llm = OpenAIChatLLM(
+            endpoint=final_endpoint,
+            model=final_model,
+            api_key=final_api_key,
+            system_prompt=final_system_prompt,
+            timeout=30.0,
+        )
+        
+        print(f"[LLM] Initialized: {final_model} @ {final_endpoint}")
+    
+    def _get_conversation_history(self, user_id: int) -> list[dict]:
+        """Get or create conversation history for a user.
+        
+        Clears history if it's been too long since the last interaction.
+        """
+        current_time = time.time()
+        
+        # Check for timeout
+        if user_id in self.last_conversation_time:
+            elapsed = current_time - self.last_conversation_time[user_id]
+            if elapsed > self.conversation_timeout:
+                # Clear stale history
+                self.conversation_history.pop(user_id, None)
+                print(f"[Chat] Cleared stale history for user {user_id}")
+        
+        # Update activity time
+        self.last_conversation_time[user_id] = current_time
+        
+        # Get or create history
+        if user_id not in self.conversation_history:
+            self.conversation_history[user_id] = []
+        
+        return self.conversation_history[user_id]
+    
+    def _add_to_conversation(self, user_id: int, role: str, content: str):
+        """Add a message to conversation history."""
+        history = self._get_conversation_history(user_id)
+        history.append({"role": role, "content": content})
+        
+        # Keep last 20 messages (10 exchanges)
+        if len(history) > 20:
+            self.conversation_history[user_id] = history[-20:]
+    
+    async def _chat_async(self, user_id: int, text: str) -> str:
+        """Generate LLM response asynchronously."""
+        # Add user message
+        self._add_to_conversation(user_id, "user", text)
+        
+        # Get full history
+        history = self._get_conversation_history(user_id)
+        
+        # Call LLM
+        response = await self.llm.chat(history)
+        
+        # Add assistant response
+        self._add_to_conversation(user_id, "assistant", response.content)
+        
+        return response.content
+    
+    def _chat_sync(self, user_id: int, text: str) -> str:
+        """Generate LLM response synchronously (for use in callbacks)."""
+        # Run the async chat in a new event loop
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # We're in an async context, use run_coroutine_threadsafe
+                import concurrent.futures
+                future = asyncio.run_coroutine_threadsafe(
+                    self._chat_async(user_id, text), loop
+                )
+                return future.result(timeout=35.0)
+            else:
+                return loop.run_until_complete(self._chat_async(user_id, text))
+        except RuntimeError:
+            # No event loop, create a new one
+            return asyncio.run(self._chat_async(user_id, text))
         
     def start(self):
         """Start the bot and connect to the server."""
