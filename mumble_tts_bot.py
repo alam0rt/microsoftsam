@@ -271,6 +271,7 @@ class MumbleTTSBot:
         self.audio_buffers = {}  # user_id -> list of PCM bytes
         self.speech_active_until = {}  # user_id -> timestamp when speech hold expires
         self.last_transcription_time = {}  # user_id -> timestamp of last incremental transcription
+        self.speech_start_time = {}  # user_id -> timestamp when speech started (for latency tracking)
         self.speech_hold_duration = 1.2  # seconds to wait after speech stops before final transcription
         self.mimic_hold_duration = 0.6  # shorter hold for mimic mode - respond quickly like a child
         self.min_speech_duration = 0.8  # minimum seconds of audio to transcribe (shorter = more hallucinations)
@@ -403,6 +404,7 @@ class MumbleTTSBot:
             self.speech_active_until[user_id] = 0
             self.last_transcription_time[user_id] = 0
             self.mimic_pending[user_id] = False
+            self.speech_start_time[user_id] = 0
         
         current_time = time.time()
         
@@ -411,6 +413,11 @@ class MumbleTTSBot:
             # Speech detected - add to buffer and extend hold time
             # Use shorter hold time in mimic mode for faster response
             hold_time = self.mimic_hold_duration if self.mimic_pending.get(user_id) else self.speech_hold_duration
+            
+            # Track when speech started (for latency measurement)
+            if not self.audio_buffers[user_id]:
+                self.speech_start_time[user_id] = current_time
+            
             self.audio_buffers[user_id].append(sound_chunk.pcm)
             self.speech_active_until[user_id] = current_time + hold_time
             
@@ -600,7 +607,13 @@ class MumbleTTSBot:
             
             buffer_duration = self._get_buffer_duration(user_id)
         
+        # Track latency from when speech started
+        speech_start = self.speech_start_time.get(user_id, time.time())
+        processing_start = time.time()
+        wait_latency = processing_start - speech_start - buffer_duration  # Time spent waiting after speech ended
+        
         print(f"[Mimic] Processing {buffer_duration:.1f}s of audio from {user_name}...")
+        print(f"[Latency] Speech detected -> processing: {processing_start - speech_start:.2f}s (includes {buffer_duration:.1f}s of speech + {wait_latency:.2f}s hold)")
         
         # Concatenate all PCM chunks
         pcm_data = b''.join(self.audio_buffers[user_id])
@@ -629,9 +642,11 @@ class MumbleTTSBot:
             audio_16k_normalized = audio_16k
         
         # Step 1: Transcribe the audio to get the text
+        transcribe_start = time.time()
         try:
             result = self.tts.transcriber(audio_16k_normalized)
             full_text = result.get('text', '').strip()
+            transcribe_end = time.time()
             
             if not full_text or self._is_hallucination(full_text):
                 print(f"[Mimic] Could not transcribe speech from {user_name}")
@@ -641,6 +656,7 @@ class MumbleTTSBot:
             text = extract_last_sentence(full_text)
             
             print(f"[Mimic] {user_name} said: \"{full_text}\"")
+            print(f"[Latency] Transcription: {transcribe_end - transcribe_start:.2f}s")
             if text != full_text:
                 print(f"[Mimic] Using last sentence: \"{text}\"")
             
@@ -659,19 +675,30 @@ class MumbleTTSBot:
                 wavfile.write(temp_path, 48000, audio_int16)
             
             # Encode the user's voice as a prompt
+            clone_start = time.time()
             print(f"[Mimic] Cloning {user_name}'s voice...")
             user_voice_prompt = self.tts.encode_prompt(temp_path, rms=0.01)
+            clone_end = time.time()
+            print(f"[Latency] Voice cloning: {clone_end - clone_start:.2f}s")
             
             # Step 3: Generate speech with their voice saying their words
+            tts_start = time.time()
             print(f"[Mimic] Speaking back: \"{text}\"")
             wav = self.tts.generate_speech(text, user_voice_prompt, num_steps=self.num_steps)
             wav_float = wav.numpy().squeeze()
+            tts_end = time.time()
+            print(f"[Latency] TTS generation: {tts_end - tts_start:.2f}s")
             
             # Convert and send
             wav_float = np.clip(wav_float, -1.0, 1.0)
             pcm_out = (wav_float * 32767).astype(np.int16)
             self.mumble.sound_output.add_sound(pcm_out.tobytes())
             
+            # Total latency summary
+            total_processing = time.time() - processing_start
+            total_from_speech = time.time() - speech_start
+            print(f"[Latency] TOTAL: {total_from_speech:.2f}s from speech start, {total_processing:.2f}s processing")
+            print(f"[Latency] Breakdown: transcribe={transcribe_end - transcribe_start:.2f}s, clone={clone_end - clone_start:.2f}s, tts={tts_end - tts_start:.2f}s")
             print(f"[Mimic] Done mimicking {user_name}!")
             
             # Keep mimic mode active - don't reset mimic_pending
