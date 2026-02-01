@@ -1,0 +1,11 @@
+--- a/opuslib_next/api/__init__.py
++++ b/opuslib_next/api/__init__.py
+@@ -12,7 +12,7 @@ __all__ = [
+ ]
+ 
+ 
+-lib_location = ctypes.util.find_library('opus')
++lib_location = '@opusLibPath@'
+ 
+ if lib_location is None:
+     raise Exception(

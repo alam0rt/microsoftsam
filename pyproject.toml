@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mumble-tts-bot"
+version = "0.1.0"
+description = "A Mumble bot that reads text messages aloud using LuxTTS voice cloning"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "Sam"}
+]
+keywords = ["mumble", "tts", "voice", "bot"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Communications :: Chat",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+
+# Note: These are declared for documentation but actual deps come from Nix
+dependencies = [
+    "numpy",
+    "protobuf",
+    "soundfile",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[project.scripts]
+mumble-tts-bot = "mumble_tts_bot:main"
+
+[tool.setuptools]
+py-modules = ["mumble_tts_bot"]
