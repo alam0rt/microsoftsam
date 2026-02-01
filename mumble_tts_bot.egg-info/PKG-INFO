@@ -14,6 +14,7 @@ Classifier: Topic :: Multimedia :: Sound/Audio :: Speech
 Requires-Python: <3.13,>=3.11
 Description-Content-Type: text/markdown
 Requires-Dist: numpy
+Requires-Dist: scipy
 Requires-Dist: protobuf
 Requires-Dist: soundfile
 Requires-Dist: torch

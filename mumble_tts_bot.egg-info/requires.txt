@@ -1,4 +1,5 @@
 numpy
+scipy
 protobuf
 soundfile
 torch

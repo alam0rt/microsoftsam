@@ -4,14 +4,18 @@ Mumble TTS Bot - Reads text messages aloud using LuxTTS voice cloning.
 
 Usage:
     python mumble_tts_bot.py --host localhost --user "TTS Bot" --reference voice.wav
+    
+    # With ASR (transcribe voice to text):
+    python mumble_tts_bot.py --host localhost --user "TTS Bot" --reference voice.wav --asr
+    
+    # Debug mode to tune VAD threshold:
+    python mumble_tts_bot.py --host localhost --user "TTS Bot" --reference voice.wav --asr --debug-rms
 """
 import argparse
 import os
 import re
 import sys
 import time
-import threading
-from queue import Queue
 
 # Add vendor paths for pymumble and LuxTTS
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -20,6 +24,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, "vendor", "LuxTTS"))
 sys.path.insert(0, os.path.join(_THIS_DIR, "vendor", "LinaCodec", "src"))
 
 import numpy as np
+from scipy import signal
 
 import pymumble_py3 as pymumble
 from pymumble_py3.constants import PYMUMBLE_CLBK_TEXTMESSAGERECEIVED, PYMUMBLE_CLBK_SOUNDRECEIVED
@@ -27,9 +32,35 @@ from pymumble_py3.constants import PYMUMBLE_CLBK_TEXTMESSAGERECEIVED, PYMUMBLE_C
 from zipvoice.luxvoice import LuxTTS
 
 
+def pcm_rms(pcm_bytes: bytes) -> int:
+    """Calculate RMS (Root Mean Square) of 16-bit PCM audio.
+    
+    Returns an integer RMS value comparable to audioop.rms().
+    Typical speech is 1000-10000, silence is <500.
+    """
+    audio = np.frombuffer(pcm_bytes, dtype=np.int16)
+    if len(audio) == 0:
+        return 0
+    # Calculate RMS and return as integer for compatibility with thresholds
+    return int(np.sqrt(np.mean(audio.astype(np.float64) ** 2)))
+
+
 def strip_html(text: str) -> str:
     """Remove HTML tags from text (Mumble messages can contain HTML)."""
     return re.sub(r'<[^>]+>', '', text)
+
+
+# Common Whisper hallucination patterns (especially with whisper-tiny)
+HALLUCINATION_PATTERNS = [
+    r'^\.+$',  # Just dots/periods
+    r'^[\s\.\,\!\?]+$',  # Just punctuation
+    r'(.)\1{4,}',  # Same character repeated 5+ times
+    r'(\b\w+\b)(\s+\1){2,}',  # Same word repeated 3+ times
+    r'^(thanks for watching|subscribe|like and subscribe|thank you for watching)',  # YouTube artifacts
+    r'^(music|applause|laughter|silence)$',  # Sound descriptions
+    r'^\[.*\]$',  # Just bracketed text like [Music]
+    r'^you$',  # Common single-word hallucination
+]
 
 
 class MumbleTTSBot:
@@ -46,6 +77,9 @@ class MumbleTTSBot:
         device: str = 'cpu',
         num_steps: int = 4,
         enable_asr: bool = False,
+        asr_threshold: int = 2000,
+        debug_rms: bool = False,
+        debug_audio: bool = False,
     ):
         self.host = host
         self.user = user
@@ -56,12 +90,24 @@ class MumbleTTSBot:
         self.num_steps = num_steps
         self.enable_asr = enable_asr
         
-        # ASR state: buffer audio per user
+        # VAD (Voice Activity Detection) settings
+        self.asr_threshold = asr_threshold  # RMS threshold for speech detection
+        self.debug_rms = debug_rms  # Show RMS levels for threshold tuning
+        self.debug_audio = debug_audio  # Save audio files for debugging
+        self._max_rms = 0  # Track max RMS for debug display
+        self._debug_audio_counter = 0  # Counter for debug audio files
+        
+        # ASR state per user
         self.audio_buffers = {}  # user_id -> list of PCM bytes
-        self.audio_sample_counts = {}  # user_id -> total samples buffered
-        # Process audio every N seconds (48kHz * seconds * 2 bytes per sample)
-        self.asr_chunk_duration = 3.0  # seconds - transcribe every 3 seconds
-        self.asr_chunk_samples = int(48000 * self.asr_chunk_duration)  # samples needed to trigger
+        self.speech_active_until = {}  # user_id -> timestamp when speech hold expires
+        self.last_transcription_time = {}  # user_id -> timestamp of last incremental transcription
+        self.speech_hold_duration = 1.2  # seconds to wait after speech stops before final transcription
+        self.min_speech_duration = 0.8  # minimum seconds of audio to transcribe (shorter = more hallucinations)
+        self.max_speech_duration = 30.0  # maximum seconds to buffer before forced transcription
+        self.incremental_interval = 4.0  # transcribe every N seconds during ongoing speech
+        
+        # Mimic mode: capture user's voice and speak it back to them
+        self.mimic_pending = {}  # user_id -> True if waiting for speech to mimic
         
         # Initialize TTS
         print(f"Loading LuxTTS model on {device}...")
@@ -82,8 +128,10 @@ class MumbleTTSBot:
         
         # Enable receiving audio if ASR is enabled
         if self.enable_asr:
-            self.mumble.receive_sound = True
-            print("ASR enabled - listening for voice input")
+            self.mumble.set_receive_sound(True)
+            print(f"ASR enabled - listening for voice (threshold: {asr_threshold})")
+            if self.debug_rms:
+                print("Debug RMS mode: showing audio levels for threshold tuning")
         
         # Set up text message callback
         self.mumble.callbacks.set_callback(
@@ -132,6 +180,27 @@ class MumbleTTSBot:
         
         print(f"[{sender}]: {text}")
         
+        # Check for @mimic command
+        if text.strip().lower() == '@mimic':
+            if not self.enable_asr:
+                print("[Mimic] ASR is not enabled, cannot mimic")
+                return
+            # Get user ID from actor
+            if hasattr(message, 'actor'):
+                user_id = message.actor
+                self.mimic_pending[user_id] = True
+                print(f"[Mimic] Now mimicking {sender}! Say @stop to stop.")
+            return
+        
+        # Check for @stop command
+        if text.strip().lower() == '@stop':
+            if hasattr(message, 'actor'):
+                user_id = message.actor
+                if self.mimic_pending.get(user_id):
+                    self.mimic_pending[user_id] = False
+                    print(f"[Mimic] Stopped mimicking {sender}")
+            return
+        
         # Generate and play speech
         try:
             self.speak(text)
@@ -139,78 +208,297 @@ class MumbleTTSBot:
             print(f"TTS error: {e}")
     
     def on_sound_received(self, user, sound_chunk):
-        """Callback for received audio from users."""
+        """Callback for received audio - implements VAD-based speech detection."""
         user_id = user['session']
+        user_name = user.get('name', 'Unknown')
+        
+        # Calculate RMS (Root Mean Square) energy of the audio
+        rms = pcm_rms(sound_chunk.pcm)
+        self._max_rms = max(rms, self._max_rms)
+        
+        # Debug display for threshold tuning
+        if self.debug_rms:
+            bar_width = min(rms // 100, 50)
+            threshold_pos = min(self.asr_threshold // 100, 50)
+            if rms < self.asr_threshold:
+                bar = '-' * bar_width
+            else:
+                bar = '-' * threshold_pos + '+' * (bar_width - threshold_pos)
+            print(f'\r[{user_name:12}] RMS: {rms:5d} / {self._max_rms:5d}  |{bar:<50}|', end='', flush=True)
         
         # Initialize buffer for new users
         if user_id not in self.audio_buffers:
             self.audio_buffers[user_id] = []
-            self.audio_sample_counts[user_id] = 0
+            self.speech_active_until[user_id] = 0
+            self.last_transcription_time[user_id] = 0
+            self.mimic_pending[user_id] = False
         
-        # Add new audio to buffer
-        self.audio_buffers[user_id].append(sound_chunk.pcm)
-        # PCM is 16-bit (2 bytes per sample)
-        self.audio_sample_counts[user_id] += len(sound_chunk.pcm) // 2
+        current_time = time.time()
         
-        # Check if we have enough audio to transcribe
-        if self.audio_sample_counts[user_id] >= self.asr_chunk_samples:
-            self._process_audio_buffer(user, user_id)
+        # Check if this chunk contains speech (above threshold)
+        if rms > self.asr_threshold:
+            # Speech detected - add to buffer and extend hold time
+            self.audio_buffers[user_id].append(sound_chunk.pcm)
+            self.speech_active_until[user_id] = current_time + self.speech_hold_duration
+            
+            buffer_duration = self._get_buffer_duration(user_id)
+            time_since_last = current_time - self.last_transcription_time[user_id]
+            
+            # Incremental transcription: transcribe periodically during ongoing speech
+            if buffer_duration >= self.min_speech_duration and time_since_last >= self.incremental_interval:
+                if self.debug_rms:
+                    print()  # Newline after RMS display
+                self._transcribe_buffer(user, user_id, incremental=True)
+            
+            # Check for max duration (forced transcription for very long speech)
+            elif buffer_duration >= self.max_speech_duration:
+                if self.debug_rms:
+                    print()  # Newline after RMS display
+                print(f"[ASR] Max duration reached for {user_name}, transcribing...")
+                self._transcribe_buffer(user, user_id, incremental=False)
+        else:
+            # Below threshold - but if we're in "hold" period, still collect audio
+            # This captures trailing sounds and pauses between words
+            if current_time < self.speech_active_until[user_id]:
+                self.audio_buffers[user_id].append(sound_chunk.pcm)
+            elif self.audio_buffers[user_id]:
+                # Hold period expired and we have buffered audio
+                if self.debug_rms:
+                    print()  # Newline after RMS display
+                
+                # Check if this user has mimic pending
+                if self.mimic_pending.get(user_id):
+                    # Only process if we have enough audio, otherwise keep waiting
+                    buffer_duration = self._get_buffer_duration(user_id)
+                    if buffer_duration >= 3.0:
+                        self._mimic_user(user, user_id)
+                    else:
+                        # Not enough audio yet - extend hold time to keep collecting
+                        self.speech_active_until[user_id] = current_time + self.speech_hold_duration
+                else:
+                    # Normal final transcription
+                    self._transcribe_buffer(user, user_id, incremental=False)
     
-    def _process_audio_buffer(self, user, user_id):
-        """Process buffered audio and transcribe it."""
+    def _get_buffer_duration(self, user_id):
+        """Calculate total duration of buffered audio in seconds."""
+        if user_id not in self.audio_buffers:
+            return 0
+        total_bytes = sum(len(chunk) for chunk in self.audio_buffers[user_id])
+        # 48kHz, 16-bit (2 bytes per sample), mono
+        return total_bytes / (48000 * 2)
+    
+    def _is_hallucination(self, text: str) -> bool:
+        """Check if transcribed text is likely a Whisper hallucination."""
+        text_lower = text.lower().strip()
+        
+        # Too short is suspicious
+        if len(text_lower) < 2:
+            return True
+        
+        # Check against known hallucination patterns
+        for pattern in HALLUCINATION_PATTERNS:
+            if re.search(pattern, text_lower, re.IGNORECASE):
+                return True
+        
+        return False
+    
+    def _transcribe_buffer(self, user, user_id, incremental=False):
+        """Transcribe buffered audio using Whisper.
+        
+        Args:
+            user: User dict from pymumble
+            user_id: User session ID
+            incremental: If True, this is a partial transcription during ongoing speech
+        """
         if not self.audio_buffers.get(user_id):
             return
         
         user_name = user.get('name', 'Unknown')
+        buffer_duration = self._get_buffer_duration(user_id)
+        
+        # Skip if too short (likely noise)
+        if buffer_duration < self.min_speech_duration:
+            if not incremental:  # Only print skip message for final transcription
+                print(f"[ASR] Skipping short audio from {user_name} ({buffer_duration:.2f}s < {self.min_speech_duration}s)")
+                self.audio_buffers[user_id] = []
+            return
         
         # Concatenate all PCM chunks
         pcm_data = b''.join(self.audio_buffers[user_id])
-        self.audio_buffers[user_id] = []  # Clear buffer
-        self.audio_sample_counts[user_id] = 0
+        
+        # For incremental: clear buffer and update timestamp
+        # For final: also clear buffer
+        self.audio_buffers[user_id] = []
+        self.last_transcription_time[user_id] = time.time()
+        
+        if not incremental:
+            self._max_rms = 0  # Reset max RMS tracking only on final
         
         # Convert PCM bytes to numpy array (16-bit signed, 48kHz mono)
         audio_int16 = np.frombuffer(pcm_data, dtype=np.int16)
         
-        print(f"[ASR] Processing {len(audio_int16)/48000:.1f}s of audio from {user_name}...")
-        
         # Convert to float32 [-1, 1]
         audio_float = audio_int16.astype(np.float32) / 32768.0
         
-        # Resample from 48kHz to 16kHz for Whisper
-        # Simple decimation by 3 (48000 / 16000 = 3)
-        audio_16k = audio_float[::3]
+        # Calculate RMS before any processing
+        rms = np.sqrt(np.mean(audio_float ** 2))
         
-        # Transcribe using the Whisper model
+        # Skip if mostly silence (prevents Whisper hallucinations)
+        if rms < 0.02:
+            if not incremental:
+                print(f"[ASR] Skipping quiet audio from {user_name} (RMS: {rms:.4f} < 0.02)")
+            return
+        
+        # Note: Normalization happens AFTER resampling below
+        
+        # Resample from 48kHz to 16kHz for Whisper FIRST
+        audio_16k = signal.resample_poly(audio_float, up=1, down=3).astype(np.float32)
+        
+        # Calculate RMS after resampling
+        rms_16k = np.sqrt(np.mean(audio_16k ** 2))
+        
+        # Normalize audio AFTER resampling for consistent Whisper input
+        # Whisper works best with audio around 0.1-0.2 RMS
+        target_rms = 0.1
+        if rms_16k > 0.001:  # Avoid division by near-zero
+            audio_16k = audio_16k * (target_rms / rms_16k)
+            # Clip to prevent clipping artifacts
+            audio_16k = np.clip(audio_16k, -1.0, 1.0).astype(np.float32)
+        
+        marker = "..." if incremental else ""
+        print(f"[ASR] Transcribing {buffer_duration:.1f}s from {user_name} (RMS: {rms:.3f} @ 48k -> {rms_16k:.3f} @ 16k -> {target_rms}){marker}")
+        
+        # Debug: save audio to file for inspection
+        if self.debug_audio:
+            import scipy.io.wavfile as wavfile
+            self._debug_audio_counter += 1
+            filename = f"debug_audio_{self._debug_audio_counter:04d}_{user_name}.wav"
+            wavfile.write(filename, 16000, audio_16k)
+            print(f"[DEBUG] Saved audio to {filename} (final RMS: {np.sqrt(np.mean(audio_16k**2)):.3f})")
+        
+        # Transcribe using Whisper
         try:
             result = self.tts.transcriber(audio_16k)
             text = result.get('text', '').strip()
             
-            if text:
-                print(f"[ASR {user_name}]: {text}")
-            else:
-                print(f"[ASR] No text transcribed")
+            # Filter out likely hallucinations from whisper-tiny
+            if text and not self._is_hallucination(text):
+                prefix = f"[ASR {user_name}]:" if not incremental else f"[ASR {user_name} ...]:"
+                print(f"{prefix} {text}")
+            elif not incremental:
+                if text:
+                    print(f"[ASR] Filtered hallucination from {user_name}: {text[:50]}...")
+                else:
+                    print(f"[ASR] No speech detected in audio from {user_name}")
         except Exception as e:
-            print(f"ASR error: {e}")
+            print(f"[ASR] Transcription error: {e}")
     
-    def speak(self, text: str):
-        """Generate speech from text and send to Mumble with streaming.
+    def _mimic_user(self, user, user_id):
+        """Capture user's voice, transcribe it, and speak it back in their voice.
         
-        Uses streaming API to start playback as soon as the first chunk is ready,
-        significantly reducing perceived latency for longer messages.
+        This uses the captured audio as both:
+        1. Reference audio for voice cloning
+        2. Input for transcription to get the text
         """
-        # Use streaming generation - yields audio chunks as they're ready
-        for wav_chunk in self.tts.generate_speech_streaming(
-            text, self.voice_prompt, num_steps=self.num_steps
-        ):
-            wav_float = wav_chunk.numpy().squeeze()
+        if not self.audio_buffers.get(user_id):
+            return
+        
+        user_name = user.get('name', 'Unknown')
+        buffer_duration = self._get_buffer_duration(user_id)
+        
+        print(f"[Mimic] Processing {buffer_duration:.1f}s of audio from {user_name}...")
+        
+        # Concatenate all PCM chunks
+        pcm_data = b''.join(self.audio_buffers[user_id])
+        self.audio_buffers[user_id] = []
+        
+        # Convert PCM bytes to numpy array (16-bit signed, 48kHz mono)
+        audio_int16 = np.frombuffer(pcm_data, dtype=np.int16)
+        audio_float = audio_int16.astype(np.float32) / 32768.0
+        
+        # Calculate RMS
+        rms = np.sqrt(np.mean(audio_float ** 2))
+        if rms < 0.02:
+            print(f"[Mimic] Audio too quiet from {user_name} (RMS: {rms:.4f})")
+            return
+        
+        # Resample to 16kHz for Whisper
+        audio_16k = signal.resample_poly(audio_float, up=1, down=3).astype(np.float32)
+        rms_16k = np.sqrt(np.mean(audio_16k ** 2))
+        
+        # Normalize for Whisper
+        target_rms = 0.1
+        if rms_16k > 0.001:
+            audio_16k_normalized = audio_16k * (target_rms / rms_16k)
+            audio_16k_normalized = np.clip(audio_16k_normalized, -1.0, 1.0).astype(np.float32)
+        else:
+            audio_16k_normalized = audio_16k
+        
+        # Step 1: Transcribe the audio to get the text
+        try:
+            result = self.tts.transcriber(audio_16k_normalized)
+            text = result.get('text', '').strip()
             
-            # Convert float32 [-1, 1] to int16 PCM
-            # Clip to prevent overflow
+            if not text or self._is_hallucination(text):
+                print(f"[Mimic] Could not transcribe speech from {user_name}")
+                return
+                
+            print(f"[Mimic] {user_name} said: \"{text}\"")
+            
+        except Exception as e:
+            print(f"[Mimic] Transcription error: {e}")
+            return
+        
+        # Step 2: Use the original 48kHz audio as voice reference
+        # LuxTTS encode_prompt expects audio data - we'll save temporarily
+        import tempfile
+        import scipy.io.wavfile as wavfile
+        
+        try:
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+                temp_path = f.name
+                wavfile.write(temp_path, 48000, audio_int16)
+            
+            # Encode the user's voice as a prompt
+            print(f"[Mimic] Cloning {user_name}'s voice...")
+            user_voice_prompt = self.tts.encode_prompt(temp_path, rms=0.01)
+            
+            # Step 3: Generate speech with their voice saying their words
+            print(f"[Mimic] Speaking back: \"{text}\"")
+            wav = self.tts.generate_speech(text, user_voice_prompt, num_steps=self.num_steps)
+            wav_float = wav.numpy().squeeze()
+            
+            # Convert and send
             wav_float = np.clip(wav_float, -1.0, 1.0)
-            pcm = (wav_float * 32767).astype(np.int16)
+            pcm_out = (wav_float * 32767).astype(np.int16)
+            self.mumble.sound_output.add_sound(pcm_out.tobytes())
             
-            # Send chunk to Mumble immediately (48kHz 16-bit mono PCM)
-            self.mumble.sound_output.add_sound(pcm.tobytes())
+            print(f"[Mimic] Done mimicking {user_name}!")
+            
+            # Keep mimic mode active - don't reset mimic_pending
+            
+        except Exception as e:
+            print(f"[Mimic] Voice cloning/synthesis error: {e}")
+        finally:
+            # Clean up temp file
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
+
+    def speak(self, text: str):
+        """Generate speech from text and send to Mumble."""
+        # Generate speech with LuxTTS
+        wav = self.tts.generate_speech(text, self.voice_prompt, num_steps=self.num_steps)
+        wav_float = wav.numpy().squeeze()
+        
+        # Convert float32 [-1, 1] to int16 PCM
+        # Clip to prevent overflow
+        wav_float = np.clip(wav_float, -1.0, 1.0)
+        pcm = (wav_float * 32767).astype(np.int16)
+        
+        # Send to Mumble (48kHz 16-bit mono PCM)
+        self.mumble.sound_output.add_sound(pcm.tobytes())
         
     def run_forever(self):
         """Keep the bot running."""
@@ -243,8 +531,14 @@ def main():
                         help='Compute device')
     parser.add_argument('--steps', type=int, default=4,
                         help='Number of inference steps (quality vs speed)')
-    parser.add_argument('--asr', action='store_true',
-                        help='Enable automatic speech recognition (transcribe voice)')
+    parser.add_argument('--no-asr', action='store_true',
+                        help='Disable automatic speech recognition')
+    parser.add_argument('--asr-threshold', type=int, default=2000,
+                        help='RMS threshold for voice activity detection (default: 2000, use --debug-rms to tune)')
+    parser.add_argument('--debug-rms', action='store_true',
+                        help='Show real-time RMS levels to help tune --asr-threshold')
+    parser.add_argument('--debug-audio', action='store_true',
+                        help='Save audio files sent to Whisper for debugging')
     
     args = parser.parse_args()
     
@@ -257,7 +551,10 @@ def main():
         reference_audio=args.reference,
         device=args.device,
         num_steps=args.steps,
-        enable_asr=args.asr,
+        enable_asr=not args.no_asr,
+        asr_threshold=args.asr_threshold,
+        debug_rms=args.debug_rms,
+        debug_audio=args.debug_audio,
     )
     
     bot.start()
