@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, "vendor", "LinaCodec", "src"))
 import numpy as np
 
 import pymumble_py3 as pymumble
-from pymumble_py3.constants import PYMUMBLE_CLBK_TEXTMESSAGERECEIVED
+from pymumble_py3.constants import PYMUMBLE_CLBK_TEXTMESSAGERECEIVED, PYMUMBLE_CLBK_SOUNDRECEIVED
 
 from zipvoice.luxvoice import LuxTTS
 
@@ -45,6 +45,7 @@ class MumbleTTSBot:
         reference_audio: str = 'reference.wav',
         device: str = 'cpu',
         num_steps: int = 4,
+        enable_asr: bool = False,
     ):
         self.host = host
         self.user = user
@@ -53,6 +54,14 @@ class MumbleTTSBot:
         self.channel = channel
         self.device = device
         self.num_steps = num_steps
+        self.enable_asr = enable_asr
+        
+        # ASR state: buffer audio per user
+        self.audio_buffers = {}  # user_id -> list of PCM bytes
+        self.audio_sample_counts = {}  # user_id -> total samples buffered
+        # Process audio every N seconds (48kHz * seconds * 2 bytes per sample)
+        self.asr_chunk_duration = 3.0  # seconds - transcribe every 3 seconds
+        self.asr_chunk_samples = int(48000 * self.asr_chunk_duration)  # samples needed to trigger
         
         # Initialize TTS
         print(f"Loading LuxTTS model on {device}...")
@@ -71,11 +80,23 @@ class MumbleTTSBot:
             reconnect=True,
         )
         
+        # Enable receiving audio if ASR is enabled
+        if self.enable_asr:
+            self.mumble.receive_sound = True
+            print("ASR enabled - listening for voice input")
+        
         # Set up text message callback
         self.mumble.callbacks.set_callback(
             PYMUMBLE_CLBK_TEXTMESSAGERECEIVED,
             self.on_message
         )
+        
+        # Set up sound received callback for ASR
+        if self.enable_asr:
+            self.mumble.callbacks.set_callback(
+                PYMUMBLE_CLBK_SOUNDRECEIVED,
+                self.on_sound_received
+            )
         
     def start(self):
         """Start the bot and connect to the server."""
@@ -116,6 +137,60 @@ class MumbleTTSBot:
             self.speak(text)
         except Exception as e:
             print(f"TTS error: {e}")
+    
+    def on_sound_received(self, user, sound_chunk):
+        """Callback for received audio from users."""
+        user_id = user['session']
+        
+        # Initialize buffer for new users
+        if user_id not in self.audio_buffers:
+            self.audio_buffers[user_id] = []
+            self.audio_sample_counts[user_id] = 0
+        
+        # Add new audio to buffer
+        self.audio_buffers[user_id].append(sound_chunk.pcm)
+        # PCM is 16-bit (2 bytes per sample)
+        self.audio_sample_counts[user_id] += len(sound_chunk.pcm) // 2
+        
+        # Check if we have enough audio to transcribe
+        if self.audio_sample_counts[user_id] >= self.asr_chunk_samples:
+            self._process_audio_buffer(user, user_id)
+    
+    def _process_audio_buffer(self, user, user_id):
+        """Process buffered audio and transcribe it."""
+        if not self.audio_buffers.get(user_id):
+            return
+        
+        user_name = user.get('name', 'Unknown')
+        
+        # Concatenate all PCM chunks
+        pcm_data = b''.join(self.audio_buffers[user_id])
+        self.audio_buffers[user_id] = []  # Clear buffer
+        self.audio_sample_counts[user_id] = 0
+        
+        # Convert PCM bytes to numpy array (16-bit signed, 48kHz mono)
+        audio_int16 = np.frombuffer(pcm_data, dtype=np.int16)
+        
+        print(f"[ASR] Processing {len(audio_int16)/48000:.1f}s of audio from {user_name}...")
+        
+        # Convert to float32 [-1, 1]
+        audio_float = audio_int16.astype(np.float32) / 32768.0
+        
+        # Resample from 48kHz to 16kHz for Whisper
+        # Simple decimation by 3 (48000 / 16000 = 3)
+        audio_16k = audio_float[::3]
+        
+        # Transcribe using the Whisper model
+        try:
+            result = self.tts.transcriber(audio_16k)
+            text = result.get('text', '').strip()
+            
+            if text:
+                print(f"[ASR {user_name}]: {text}")
+            else:
+                print(f"[ASR] No text transcribed")
+        except Exception as e:
+            print(f"ASR error: {e}")
     
     def speak(self, text: str):
         """Generate speech from text and send to Mumble with streaming.
@@ -168,6 +243,8 @@ def main():
                         help='Compute device')
     parser.add_argument('--steps', type=int, default=4,
                         help='Number of inference steps (quality vs speed)')
+    parser.add_argument('--asr', action='store_true',
+                        help='Enable automatic speech recognition (transcribe voice)')
     
     args = parser.parse_args()
     
@@ -180,6 +257,7 @@ def main():
         reference_audio=args.reference,
         device=args.device,
         num_steps=args.steps,
+        enable_asr=args.asr,
     )
     
     bot.start()
