@@ -51,11 +51,15 @@ dependencies = [
     # LinaCodec dependencies
     "jsonargparse[signatures]",
     "tqdm",
+    # LLM integration
+    "httpx>=0.27",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest",
+    "pytest-asyncio>=0.23",
 ]
 
 [project.scripts]
@@ -63,6 +67,7 @@ mumble-tts-bot = "mumble_tts_bot:main"
 
 [tool.setuptools]
 py-modules = ["mumble_tts_bot"]
+packages = ["mumble_voice_bot", "mumble_voice_bot.interfaces", "mumble_voice_bot.providers"]
 # Include vendored pymumble_py3 in the package path
 package-dir = {"pymumble_py3" = "vendor/botamusique/pymumble_py3"}
 

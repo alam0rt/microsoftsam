@@ -8,18 +8,24 @@ Usage:
     # With ASR (transcribe voice to text):
     python mumble_tts_bot.py --host localhost --user "TTS Bot" --reference voice.wav --asr
     
+    # With LLM conversation mode (requires config.yaml or --llm-endpoint):
+    python mumble_tts_bot.py --host localhost --user "TTS Bot" --reference voice.wav --asr --chat
+    
     # Debug mode to tune VAD threshold:
     python mumble_tts_bot.py --host localhost --user "TTS Bot" --reference voice.wav --asr --debug-rms
 
 Commands (send as text messages in Mumble):
     @mimic          - Start mimicking the sender's voice (repeats back what they say)
-    @stop           - Stop mimicking
+    @chat           - Start conversation mode with LLM (responds intelligently)
+    @stop           - Stop mimicking or chatting
     @save <name>    - Save the last mimic'd voice (or current voice) with a name
     @voice <name>   - Switch to a previously saved voice
     @voices         - List all available saved voices
     @clone <url>    - Clone voice from a URL (wav/mp3) and use it
+    @clear          - Clear conversation history
 """
 import argparse
+import asyncio
 import os
 import re
 import sys
@@ -46,6 +52,15 @@ import pymumble_py3 as pymumble
 from pymumble_py3.constants import PYMUMBLE_CLBK_TEXTMESSAGERECEIVED, PYMUMBLE_CLBK_SOUNDRECEIVED
 
 from zipvoice.luxvoice import LuxTTS
+
+# Import LLM components for conversation mode
+try:
+    from mumble_voice_bot.providers.openai_llm import OpenAIChatLLM
+    from mumble_voice_bot.config import load_config, BotConfig
+    LLM_AVAILABLE = True
+except ImportError:
+    LLM_AVAILABLE = False
+    print("[Warning] LLM modules not available. Install with: pip install httpx pyyaml")
 
 
 # =============================================================================
@@ -265,6 +280,13 @@ class MumbleTTSBot:
         debug_rms: bool = False,
         debug_audio: bool = False,
         voices_dir: str = 'voices',
+        # LLM configuration
+        enable_chat: bool = False,
+        llm_endpoint: str = None,
+        llm_model: str = None,
+        llm_api_key: str = None,
+        llm_system_prompt: str = None,
+        config_file: str = None,
     ):
         self.host = host
         self.user = user
@@ -279,6 +301,27 @@ class MumbleTTSBot:
         self.voices_dir = voices_dir
         self.current_voice_name = 'default'  # Track which voice is active
         self.last_mimic_voice = None  # Store the last mimic'd voice prompt for @save
+        
+        # LLM/Chat configuration
+        self.enable_chat = enable_chat
+        self.llm = None  # Will be initialized if chat is enabled
+        self.chat_active = {}  # user_id -> True if chat mode active
+        self.conversation_history = {}  # user_id -> list of messages
+        self.conversation_timeout = 300.0  # 5 minutes before clearing history
+        self.last_conversation_time = {}  # user_id -> timestamp
+        
+        # Initialize LLM if chat is enabled
+        if self.enable_chat and LLM_AVAILABLE:
+            self._init_llm(
+                endpoint=llm_endpoint,
+                model=llm_model,
+                api_key=llm_api_key,
+                system_prompt=llm_system_prompt,
+                config_file=config_file,
+            )
+        elif self.enable_chat and not LLM_AVAILABLE:
+            print("[Warning] Chat mode requested but LLM modules not available")
+            self.enable_chat = False
         
         # VAD (Voice Activity Detection) settings
         self.asr_threshold = asr_threshold  # RMS threshold for speech detection
