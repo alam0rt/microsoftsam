@@ -23,6 +23,9 @@ import os
 import re
 import sys
 import time
+import threading
+import queue
+from concurrent.futures import ThreadPoolExecutor
 from typing import Generator, List
 
 # Add vendor paths for pymumble and LuxTTS
@@ -294,6 +297,18 @@ class MumbleTTSBot:
         # Mimic mode: capture user's voice and speak it back to them (like an annoying child)
         self.mimic_pending = {}  # user_id -> True if actively mimicking this user
         
+        # Threading for non-blocking ASR and TTS
+        # Use separate thread pools so ASR doesn't block TTS and vice versa
+        self._asr_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ASR")
+        self._tts_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="TTS")
+        self._tts_queue = queue.Queue()  # Queue of (text, voice_prompt) to speak
+        self._tts_lock = threading.Lock()  # Protect voice_prompt access
+        self._shutdown = threading.Event()  # Signal for clean shutdown
+        
+        # Start TTS worker thread
+        self._tts_worker_thread = threading.Thread(target=self._tts_worker, daemon=True, name="TTS-Worker")
+        self._tts_worker_thread.start()
+        
         # Initialize TTS with our streaming-capable subclass
         print(f"Loading StreamingLuxTTS model on {device}...")
         self.tts = StreamingLuxTTS('YatharthS/LuxTTS', device=device, threads=2)
@@ -563,11 +578,12 @@ class MumbleTTSBot:
         """Handle @voice <name> command - switch to a saved voice."""
         voice_prompt = self._load_voice(name)
         if voice_prompt is not None:
-            self.voice_prompt = voice_prompt
-            self.current_voice_name = name
+            with self._tts_lock:
+                self.voice_prompt = voice_prompt
+                self.current_voice_name = name
             print(f"[Voice] Switched to voice '{name}'")
-            # Speak a confirmation
-            self.speak(f"Voice switched to {name}")
+            # Speak a confirmation (blocking so it uses the new voice)
+            self.speak(f"Voice switched to {name}", blocking=True)
         else:
             available = self._list_voices()
             print(f"[Voice] Available voices: {', '.join(available) if available else 'none'}")
@@ -636,21 +652,29 @@ class MumbleTTSBot:
                 if buffer_duration >= 15.0:
                     if self.debug_rms:
                         print()
-                    print(f"[Mimic] Max buffer reached, processing...")
-                    self._mimic_user(user, user_id)
+                    print(f"[Mimic] Max buffer reached, processing async...")
+                    # Copy buffer and clear it, then process async
+                    audio_data = list(self.audio_buffers[user_id])
+                    self.audio_buffers[user_id] = []
+                    self._asr_executor.submit(self._mimic_user_async, user.copy(), user_id, audio_data)
                 # Otherwise just accumulate
             # Incremental transcription: transcribe periodically during ongoing speech
             elif buffer_duration >= self.min_speech_duration and time_since_last >= self.incremental_interval:
                 if self.debug_rms:
                     print()  # Newline after RMS display
-                self._transcribe_buffer(user, user_id, incremental=True)
+                # Copy buffer for async transcription (don't clear - it's incremental)
+                audio_data = list(self.audio_buffers[user_id])
+                self.last_transcription_time[user_id] = current_time
+                self._asr_executor.submit(self._transcribe_buffer_async, user.copy(), user_id, audio_data, True)
             
             # Check for max duration (forced transcription for very long speech)
             elif buffer_duration >= self.max_speech_duration:
                 if self.debug_rms:
                     print()  # Newline after RMS display
-                print(f"[ASR] Max duration reached for {user_name}, transcribing...")
-                self._transcribe_buffer(user, user_id, incremental=False)
+                print(f"[ASR] Max duration reached for {user_name}, transcribing async...")
+                audio_data = list(self.audio_buffers[user_id])
+                self.audio_buffers[user_id] = []
+                self._asr_executor.submit(self._transcribe_buffer_async, user.copy(), user_id, audio_data, False)
         else:
             # Below threshold - but if we're in "hold" period, still collect audio
             # This captures trailing sounds and pauses between words
@@ -661,21 +685,24 @@ class MumbleTTSBot:
                 if self.debug_rms:
                     print()  # Newline after RMS display
                 
+                # Copy buffer and clear it for async processing
+                audio_data = list(self.audio_buffers[user_id])
+                self.audio_buffers[user_id] = []
+                
                 # Check if this user has mimic mode active
                 if self.mimic_pending.get(user_id):
                     # Mimic mode: repeat what they said back to them (like an annoying child)
-                    buffer_duration = self._get_buffer_duration(user_id)
+                    buffer_duration = len(b''.join(audio_data)) / (48000 * 2)
                     # Need at least 2.5s for decent voice cloning (LuxTTS needs enough audio
                     # for the convolution layers - shorter audio causes kernel size errors)
                     if buffer_duration >= 2.5:
-                        self._mimic_user(user, user_id)
+                        self._asr_executor.submit(self._mimic_user_async, user.copy(), user_id, audio_data)
                     else:
                         # Too short - just discard and wait for next utterance
                         print(f"[Mimic] Audio too short ({buffer_duration:.1f}s < 2.5s), waiting for more...")
-                        self.audio_buffers[user_id] = []
                 else:
-                    # Normal final transcription
-                    self._transcribe_buffer(user, user_id, incremental=False)
+                    # Normal final transcription (async)
+                    self._asr_executor.submit(self._transcribe_buffer_async, user.copy(), user_id, audio_data, False)
     
     def _get_buffer_duration(self, user_id):
         """Calculate total duration of buffered audio in seconds."""
@@ -695,6 +722,192 @@ class MumbleTTSBot:
         
         return False
     
+    def _transcribe_buffer_async(self, user: dict, user_id: int, audio_chunks: list, incremental: bool):
+        """Async version of transcribe that takes audio data directly.
+        
+        This runs in the ASR thread pool so it doesn't block callbacks.
+        """
+        user_name = user.get('name', 'Unknown')
+        
+        # Concatenate all PCM chunks
+        pcm_data = b''.join(audio_chunks)
+        buffer_duration = len(pcm_data) / (48000 * 2)
+        
+        # Skip if too short (likely noise)
+        if buffer_duration < self.min_speech_duration:
+            if not incremental:
+                print(f"[ASR] Skipping short audio from {user_name} ({buffer_duration:.2f}s < {self.min_speech_duration}s)")
+            return
+        
+        # Convert PCM bytes to numpy array (16-bit signed, 48kHz mono)
+        audio_int16 = np.frombuffer(pcm_data, dtype=np.int16)
+        audio_float = audio_int16.astype(np.float32) / 32768.0
+        
+        # Calculate RMS
+        rms = np.sqrt(np.mean(audio_float ** 2))
+        if rms < 0.02:
+            if not incremental:
+                print(f"[ASR] Skipping quiet audio from {user_name} (RMS: {rms:.4f} < 0.02)")
+            return
+        
+        # Resample from 48kHz to 16kHz for Whisper
+        audio_16k = signal.resample_poly(audio_float, up=1, down=3).astype(np.float32)
+        rms_16k = np.sqrt(np.mean(audio_16k ** 2))
+        
+        # Normalize for Whisper
+        target_rms = 0.1
+        if rms_16k > 0.001:
+            audio_16k = audio_16k * (target_rms / rms_16k)
+            audio_16k = np.clip(audio_16k, -1.0, 1.0).astype(np.float32)
+        
+        marker = "..." if incremental else ""
+        print(f"[ASR] Transcribing {buffer_duration:.1f}s from {user_name}{marker}")
+        
+        try:
+            result = self.tts.transcriber(audio_16k)
+            text = result.get('text', '').strip()
+            
+            if text and not self._is_hallucination(text):
+                prefix = f"[ASR {user_name}]:" if not incremental else f"[ASR {user_name} ...]:"
+                print(f"{prefix} {text}")
+            elif not incremental:
+                if text:
+                    print(f"[ASR] Filtered hallucination from {user_name}: {text[:50]}...")
+                else:
+                    print(f"[ASR] No speech detected from {user_name}")
+        except Exception as e:
+            print(f"[ASR] Transcription error: {e}")
+    
+    def _mimic_user_async(self, user: dict, user_id: int, audio_chunks: list):
+        """Async version of mimic that takes audio data directly.
+        
+        This runs in the ASR thread pool so it doesn't block callbacks.
+        """
+        user_name = user.get('name', 'Unknown')
+        
+        # Concatenate all PCM chunks
+        pcm_data = b''.join(audio_chunks)
+        buffer_duration = len(pcm_data) / (48000 * 2)
+        
+        # Clear CUDA cache before processing
+        if self.device == 'cuda':
+            torch.cuda.empty_cache()
+        
+        # Cap at 25 seconds
+        max_mimic_duration = 25.0
+        min_mimic_duration = 2.5
+        
+        if buffer_duration < min_mimic_duration:
+            print(f"[Mimic] Audio too short from {user_name} ({buffer_duration:.1f}s)")
+            return
+        
+        if buffer_duration > max_mimic_duration:
+            print(f"[Mimic] Trimming {buffer_duration:.1f}s to {max_mimic_duration}s")
+            bytes_to_keep = int(max_mimic_duration * 48000 * 2)
+            pcm_data = pcm_data[-bytes_to_keep:]
+            buffer_duration = max_mimic_duration
+        
+        # Track latency
+        processing_start = time.time()
+        print(f"[Mimic] Processing {buffer_duration:.1f}s of audio from {user_name}...")
+        
+        # Convert PCM bytes to numpy array
+        audio_int16 = np.frombuffer(pcm_data, dtype=np.int16)
+        audio_float = audio_int16.astype(np.float32) / 32768.0
+        
+        # Calculate RMS
+        rms = np.sqrt(np.mean(audio_float ** 2))
+        if rms < 0.02:
+            print(f"[Mimic] Audio too quiet from {user_name} (RMS: {rms:.4f})")
+            return
+        
+        # Resample to 16kHz for Whisper
+        audio_16k = signal.resample_poly(audio_float, up=1, down=3).astype(np.float32)
+        rms_16k = np.sqrt(np.mean(audio_16k ** 2))
+        
+        # Normalize for Whisper
+        target_rms = 0.1
+        if rms_16k > 0.001:
+            audio_16k_normalized = audio_16k * (target_rms / rms_16k)
+            audio_16k_normalized = np.clip(audio_16k_normalized, -1.0, 1.0).astype(np.float32)
+        else:
+            audio_16k_normalized = audio_16k
+        
+        # Step 1: Transcribe
+        transcribe_start = time.time()
+        try:
+            result = self.tts.transcriber(audio_16k_normalized)
+            full_text = result.get('text', '').strip()
+            transcribe_end = time.time()
+            
+            if not full_text or self._is_hallucination(full_text):
+                print(f"[Mimic] Could not transcribe speech from {user_name}")
+                return
+            
+            text = extract_last_sentence(full_text)
+            print(f"[Mimic] {user_name} said: \"{full_text}\"")
+            print(f"[Latency] Transcription: {transcribe_end - transcribe_start:.2f}s")
+            if text != full_text:
+                print(f"[Mimic] Using last sentence: \"{text}\"")
+                
+        except Exception as e:
+            print(f"[Mimic] Transcription error: {e}")
+            return
+        
+        # Step 2: Clone voice
+        import tempfile
+        import scipy.io.wavfile as wavfile
+        
+        try:
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+                temp_path = f.name
+                wavfile.write(temp_path, 48000, audio_int16)
+            
+            clone_start = time.time()
+            ref_duration = min(buffer_duration, 10.0)
+            print(f"[Mimic] Cloning {user_name}'s voice (using {ref_duration:.1f}s reference)...")
+            user_voice_prompt = self.tts.encode_prompt(temp_path, duration=ref_duration, rms=0.01)
+            clone_end = time.time()
+            print(f"[Latency] Voice cloning: {clone_end - clone_start:.2f}s")
+            
+            # Validate voice prompt
+            if not self._validate_voice_prompt(user_voice_prompt):
+                print(f"[Mimic] Invalid voice prompt, skipping...")
+                return
+            
+            # Step 3: Generate TTS (queue it for the TTS worker)
+            tts_start = time.time()
+            print(f"[Mimic] Speaking back: \"{text}\"")
+            
+            # Generate speech synchronously in this thread (we're already in a worker)
+            wav = self.tts.generate_speech(text, user_voice_prompt, num_steps=self.num_steps)
+            wav_float = wav.numpy().squeeze()
+            tts_end = time.time()
+            print(f"[Latency] TTS generation: {tts_end - tts_start:.2f}s")
+            
+            # Send audio
+            wav_float = np.clip(wav_float, -1.0, 1.0)
+            pcm_out = (wav_float * 32767).astype(np.int16)
+            self.mumble.sound_output.add_sound(pcm_out.tobytes())
+            
+            # Latency summary
+            total_processing = time.time() - processing_start
+            print(f"[Latency] TOTAL: {total_processing:.2f}s processing")
+            print(f"[Mimic] Done mimicking {user_name}!")
+            
+            # Store for @save
+            self.last_mimic_voice = user_voice_prompt
+            
+        except Exception as e:
+            print(f"[Mimic] Voice cloning/synthesis error: {e}")
+        finally:
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
+            if self.device == 'cuda':
+                torch.cuda.empty_cache()
+
     def _transcribe_buffer(self, user, user_id, incremental=False):
         """Transcribe buffered audio using Whisper.
         
@@ -946,20 +1159,46 @@ class MumbleTTSBot:
             if self.device == 'cuda':
                 torch.cuda.empty_cache()
 
-    def speak(self, text: str, streaming: bool = True):
-        """Generate speech from text and send to Mumble.
+    def _tts_worker(self):
+        """Background worker that processes TTS requests from the queue.
+        
+        This runs in a dedicated thread so TTS generation doesn't block
+        the main thread or ASR processing.
+        """
+        print("[TTS Worker] Started")
+        while not self._shutdown.is_set():
+            try:
+                # Wait for work with timeout so we can check shutdown
+                try:
+                    text, voice_prompt = self._tts_queue.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                
+                # Generate and play speech
+                try:
+                    self._speak_sync(text, voice_prompt)
+                except Exception as e:
+                    print(f"[TTS Worker] Error: {e}")
+                finally:
+                    self._tts_queue.task_done()
+                    
+            except Exception as e:
+                print(f"[TTS Worker] Unexpected error: {e}")
+        
+        print("[TTS Worker] Stopped")
+    
+    def _speak_sync(self, text: str, voice_prompt: dict, streaming: bool = True):
+        """Synchronously generate and play speech (runs in worker thread).
         
         Args:
             text: The text to speak
-            streaming: If True, use streaming generation for faster first response.
-                      This splits text into sentences and plays each as soon as
-                      it's ready, making the bot feel more responsive/human-like.
+            voice_prompt: The voice prompt to use
+            streaming: If True, use streaming generation
         """
         if streaming:
             # Use streaming for faster perceived response time
-            # Audio starts playing as soon as the first sentence is generated
             for wav_chunk in self.tts.generate_speech_streaming(
-                text, self.voice_prompt, num_steps=self.num_steps
+                text, voice_prompt, num_steps=self.num_steps
             ):
                 wav_float = wav_chunk.numpy().squeeze()
                 wav_float = np.clip(wav_float, -1.0, 1.0)
@@ -967,11 +1206,30 @@ class MumbleTTSBot:
                 self.mumble.sound_output.add_sound(pcm.tobytes())
         else:
             # Non-streaming: generate all audio at once
-            wav = self.tts.generate_speech(text, self.voice_prompt, num_steps=self.num_steps)
+            wav = self.tts.generate_speech(text, voice_prompt, num_steps=self.num_steps)
             wav_float = wav.numpy().squeeze()
             wav_float = np.clip(wav_float, -1.0, 1.0)
             pcm = (wav_float * 32767).astype(np.int16)
             self.mumble.sound_output.add_sound(pcm.tobytes())
+
+    def speak(self, text: str, voice_prompt: dict = None, blocking: bool = False):
+        """Queue text to be spoken (non-blocking by default).
+        
+        Args:
+            text: The text to speak
+            voice_prompt: Voice to use (defaults to self.voice_prompt)
+            blocking: If True, wait for speech to complete
+        """
+        if voice_prompt is None:
+            with self._tts_lock:
+                voice_prompt = self.voice_prompt
+        
+        if blocking:
+            # Synchronous - used for confirmations like @voice switching
+            self._speak_sync(text, voice_prompt)
+        else:
+            # Queue for async processing
+            self._tts_queue.put((text, voice_prompt))
         
     def run_forever(self):
         """Keep the bot running."""
@@ -981,6 +1239,11 @@ class MumbleTTSBot:
                 time.sleep(1)
         except KeyboardInterrupt:
             print("\nShutting down...")
+            self._shutdown.set()
+            # Wait for TTS queue to drain
+            self._tts_queue.join()
+            self._asr_executor.shutdown(wait=True)
+            self._tts_executor.shutdown(wait=True)
 
 
 def main():
