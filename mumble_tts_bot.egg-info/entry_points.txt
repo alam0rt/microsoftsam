@@ -1,0 +1,2 @@
+[console_scripts]
+mumble-tts-bot = mumble_tts_bot:main

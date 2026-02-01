@@ -1,0 +1,9 @@
+[submodule "vendor/botamusique"]
+	path = vendor/botamusique
+	url = https://github.com/algielen/botamusique.git
+[submodule "vendor/LuxTTS"]
+	path = vendor/LuxTTS
+	url = https://github.com/ysharma3501/LuxTTS.git
+[submodule "vendor/LinaCodec"]
+	path = vendor/LinaCodec
+	url = https://github.com/ysharma3501/LinaCodec.git

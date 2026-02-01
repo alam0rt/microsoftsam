@@ -1,0 +1,40 @@
+Metadata-Version: 2.4
+Name: mumble-tts-bot
+Version: 0.1.0
+Summary: A Mumble bot that reads text messages aloud using LuxTTS voice cloning
+Author: Sam
+License: MIT
+Keywords: mumble,tts,voice,bot
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: End Users/Desktop
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Topic :: Communications :: Chat
+Classifier: Topic :: Multimedia :: Sound/Audio :: Speech
+Requires-Python: <3.13,>=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: numpy
+Requires-Dist: protobuf
+Requires-Dist: soundfile
+Requires-Dist: torch
+Requires-Dist: torchaudio
+Requires-Dist: transformers<=4.57.6
+Requires-Dist: huggingface-hub
+Requires-Dist: safetensors
+Requires-Dist: librosa
+Requires-Dist: pydub
+Requires-Dist: opuslib-next
+Requires-Dist: lhotse
+Requires-Dist: tensorboard
+Requires-Dist: vocos
+Requires-Dist: onnxruntime
+Requires-Dist: cn2an
+Requires-Dist: inflect
+Requires-Dist: jieba
+Requires-Dist: pypinyin
+Requires-Dist: piper-phonemize
+Requires-Dist: setuptools<81
+Requires-Dist: jsonargparse[signatures]
+Requires-Dist: tqdm
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
