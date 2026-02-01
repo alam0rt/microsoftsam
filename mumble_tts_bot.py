@@ -19,6 +19,7 @@ Usage:
 """
 import argparse
 import asyncio
+from datetime import datetime
 import os
 import random
 import re
@@ -40,7 +41,13 @@ import torch
 from scipy import signal
 
 import pymumble_py3 as pymumble
-from pymumble_py3.constants import PYMUMBLE_CLBK_TEXTMESSAGERECEIVED, PYMUMBLE_CLBK_SOUNDRECEIVED
+from pymumble_py3.constants import (
+    PYMUMBLE_CLBK_TEXTMESSAGERECEIVED,
+    PYMUMBLE_CLBK_SOUNDRECEIVED,
+    PYMUMBLE_CLBK_USERCREATED,
+    PYMUMBLE_CLBK_USERUPDATED,
+    PYMUMBLE_CLBK_USERREMOVED,
+)
 
 from zipvoice.luxvoice import LuxTTS
 
@@ -206,9 +213,14 @@ class MumbleVoiceBot:
         self.audio_buffers = {}  # user_id -> list of PCM bytes
         self.speech_active_until = {}  # user_id -> timestamp
         self.speech_start_time = {}  # user_id -> timestamp
-        self.speech_hold_duration = 0.8  # seconds to wait after speech stops (was 1.5)
-        self.min_speech_duration = 0.5  # minimum seconds to transcribe (was 0.8)
-        self.max_speech_duration = 15.0  # max seconds before forced processing (was 30)
+        self.speech_hold_duration = 0.6  # seconds of silence before processing
+        self.min_speech_duration = 0.3  # minimum seconds to transcribe
+        self.max_speech_duration = 5.0  # force processing after 5 seconds (keeps Whisper fast)
+        
+        # Pending transcriptions (for accumulating long utterances)
+        self.pending_text = {}  # user_id -> accumulated text
+        self.pending_text_time = {}  # user_id -> timestamp of last text
+        self.pending_text_timeout = 1.5  # seconds to wait for more speech before responding
         
         # Conversation state per user
         self.conversation_history = {}  # user_id -> list of messages
@@ -220,7 +232,7 @@ class MumbleVoiceBot:
         self._shutdown = threading.Event()
         
         # Threading
-        self._asr_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ASR")
+        self._asr_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ASR")  # Allow 2 workers
         self._tts_queue = queue.Queue()
         self._tts_lock = threading.Lock()
         
@@ -276,6 +288,18 @@ class MumbleVoiceBot:
         self.mumble.callbacks.set_callback(
             PYMUMBLE_CLBK_SOUNDRECEIVED,
             self.on_sound_received
+        )
+        self.mumble.callbacks.set_callback(
+            PYMUMBLE_CLBK_USERCREATED,
+            self.on_user_joined
+        )
+        self.mumble.callbacks.set_callback(
+            PYMUMBLE_CLBK_USERUPDATED,
+            self.on_user_updated
+        )
+        self.mumble.callbacks.set_callback(
+            PYMUMBLE_CLBK_USERREMOVED,
+            self.on_user_left
         )
     
     def _load_reference_voice(self, reference_audio: str):
@@ -429,6 +453,57 @@ Sound like a friend chatting, not a corporate assistant.
 Write numbers and symbols as words: "about 5 dollars" not "$5"."""
     
     # =========================================================================
+    # Context & Awareness
+    # =========================================================================
+    
+    def _get_time_context(self) -> str:
+        """Get current time context for the LLM."""
+        now = datetime.now()
+        hour = now.hour
+        
+        # Time of day
+        if 5 <= hour < 12:
+            time_of_day = "morning"
+        elif 12 <= hour < 17:
+            time_of_day = "afternoon"
+        elif 17 <= hour < 21:
+            time_of_day = "evening"
+        else:
+            time_of_day = "night"
+        
+        # Day info
+        day_name = now.strftime("%A")
+        time_str = now.strftime("%I:%M %p").lstrip("0")
+        
+        return f"It's {time_of_day}, {day_name} at {time_str}."
+    
+    def _get_channel_context(self) -> str:
+        """Get info about who's in the channel."""
+        try:
+            my_channel = self.mumble.users.myself["channel_id"]
+            users_in_channel = [
+                u["name"] for u in self.mumble.users.values()
+                if u["channel_id"] == my_channel and u["session"] != self.mumble.users.myself_session
+            ]
+            if users_in_channel:
+                return f"Users in channel: {', '.join(users_in_channel)}."
+            return "You're alone in the channel."
+        except Exception:
+            return ""
+    
+    def _inject_context(self, text: str, user_name: str = None) -> str:
+        """Inject time and context into a message for the LLM."""
+        context_parts = [self._get_time_context()]
+        
+        # Add what the user said
+        if user_name:
+            context_parts.append(f"[{user_name} says]: {text}")
+        else:
+            context_parts.append(text)
+        
+        return " ".join(context_parts)
+
+    # =========================================================================
     # Conversation Management
     # =========================================================================
     
@@ -449,14 +524,25 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         
         return self.conversation_history[user_id]
     
-    def _add_to_history(self, user_id: int, role: str, content: str, user_name: str = None):
+    def _add_to_history(self, user_id: int, role: str, content: str, user_name: str = None, include_time: bool = False):
         """Add a message to conversation history."""
         history = self._get_history(user_id)
         
-        # For user messages, optionally prefix with their name for context
-        if role == "user" and user_name:
-            # Store the name so LLM knows who's talking
-            content = f"[{user_name} says]: {content}"
+        # For user messages, add context
+        if role == "user":
+            parts = []
+            
+            # Add time context occasionally (first message or every 5th message)
+            if include_time or len(history) == 0 or len(history) % 5 == 0:
+                parts.append(f"[{self._get_time_context()}]")
+            
+            # Add user name
+            if user_name:
+                parts.append(f"[{user_name} says]: {content}")
+            else:
+                parts.append(content)
+            
+            content = " ".join(parts)
         
         history.append({"role": role, "content": content})
         
@@ -524,27 +610,29 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             self.audio_buffers[user_id].append(sound_chunk.pcm)
             self.speech_active_until[user_id] = current_time + self.speech_hold_duration
             
-            # Check for max duration
+            # Check for max duration - process chunk but keep listening
             buffer_duration = self._get_buffer_duration(user_id)
             if buffer_duration >= self.max_speech_duration:
                 if self.debug_rms:
                     print()
-                print(f"[ASR] Max duration reached for {user_name}")
+                print(f"[ASR] Chunk ready ({buffer_duration:.1f}s) from {user_name}, still listening...")
                 audio_data = list(self.audio_buffers[user_id])
                 self.audio_buffers[user_id] = []
-                self._asr_executor.submit(self._process_speech, user.copy(), user_id, audio_data)
+                # is_continuation=True means don't respond yet, just accumulate
+                self._asr_executor.submit(self._process_speech, user.copy(), user_id, audio_data, True)
         else:
             # Below threshold
             if current_time < self.speech_active_until[user_id]:
                 self.audio_buffers[user_id].append(sound_chunk.pcm)
             elif self.audio_buffers[user_id]:
-                # Speech ended
+                # Speech ended - process and respond
                 if self.debug_rms:
                     print()
                 
                 audio_data = list(self.audio_buffers[user_id])
                 self.audio_buffers[user_id] = []
-                self._asr_executor.submit(self._process_speech, user.copy(), user_id, audio_data)
+                # is_continuation=False means respond after processing
+                self._asr_executor.submit(self._process_speech, user.copy(), user_id, audio_data, False)
     
     def _get_buffer_duration(self, user_id) -> float:
         """Calculate buffered audio duration in seconds."""
@@ -553,8 +641,8 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         total_bytes = sum(len(chunk) for chunk in self.audio_buffers[user_id])
         return total_bytes / (48000 * 2)  # 48kHz, 16-bit mono
     
-    def _process_speech(self, user: dict, user_id: int, audio_chunks: list):
-        """Process speech: transcribe -> LLM -> TTS."""
+    def _process_speech(self, user: dict, user_id: int, audio_chunks: list, is_continuation: bool = False):
+        """Process speech: transcribe and accumulate, respond on pause."""
         user_name = user.get('name', 'Unknown')
         
         # Concatenate audio
@@ -562,7 +650,8 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         buffer_duration = len(pcm_data) / (48000 * 2)
         
         if buffer_duration < self.min_speech_duration:
-            print(f"[ASR] Skipping short audio from {user_name} ({buffer_duration:.2f}s)")
+            # Too short - but check if we have pending text to respond to
+            self._maybe_respond(user_id, user_name)
             return
         
         # Convert and resample
@@ -571,7 +660,8 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         
         rms = np.sqrt(np.mean(audio_float ** 2))
         if rms < 0.02:
-            print(f"[ASR] Skipping quiet audio from {user_name}")
+            # Too quiet - but check pending
+            self._maybe_respond(user_id, user_name)
             return
         
         # Resample 48kHz -> 16kHz
@@ -593,28 +683,50 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             transcribe_time = time.time() - start_time
             
             if not text or len(text) < 2:
-                print(f"[ASR] No speech detected from {user_name}")
+                self._maybe_respond(user_id, user_name)
                 return
             
             print(f"[ASR] {user_name}: \"{text}\" ({transcribe_time:.2f}s)")
             
-            # Generate LLM response if available
-            if self.llm:
-                # Small thinking delay
-                think_delay = random.uniform(0.2, 0.5)
-                time.sleep(think_delay)
-                
-                print(f"[LLM] Generating response...")
-                llm_start = time.time()
-                response = self._generate_response_sync(user_id, text, user_name)
-                llm_time = time.time() - llm_start
-                print(f"[LLM] Response: \"{response}\" ({llm_time:.2f}s)")
-                
-                # Queue TTS
-                self._tts_queue.put((response, self.voice_prompt))
+            # Accumulate text
+            current_time = time.time()
+            if user_id in self.pending_text:
+                self.pending_text[user_id] += " " + text
+            else:
+                self.pending_text[user_id] = text
+            self.pending_text_time[user_id] = current_time
+            
+            # If this was triggered by silence (not max duration), respond now
+            if not is_continuation:
+                self._maybe_respond(user_id, user_name, force=True)
             
         except Exception as e:
             print(f"[Error] Processing failed: {e}")
+    
+    def _maybe_respond(self, user_id: int, user_name: str, force: bool = False):
+        """Respond if we have pending text and enough time has passed."""
+        if user_id not in self.pending_text:
+            return
+        
+        current_time = time.time()
+        time_since_last = current_time - self.pending_text_time.get(user_id, 0)
+        
+        # Respond if forced or if enough time has passed
+        if force or time_since_last >= self.pending_text_timeout:
+            text = self.pending_text.pop(user_id, "")
+            self.pending_text_time.pop(user_id, None)
+            
+            if text and self.llm:
+                print(f"[LLM] Generating response to: \"{text}\"")
+                llm_start = time.time()
+                
+                try:
+                    response = self._generate_response_sync(user_id, text, user_name)
+                    llm_time = time.time() - llm_start
+                    print(f"[LLM] Response: \"{response}\" ({llm_time:.2f}s)")
+                    self._tts_queue.put((response, self.voice_prompt))
+                except Exception as e:
+                    print(f"[LLM] Error: {e}")
     
     # =========================================================================
     # TTS
@@ -681,6 +793,85 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         # Speak text messages
         self.speak(text)
     
+    # =========================================================================
+    # User Events - Greetings and Awareness
+    # =========================================================================
+    
+    def on_user_joined(self, user):
+        """Handle when a new user connects to the server."""
+        user_name = user.get("name", "Someone")
+        print(f"[Event] {user_name} connected to the server")
+        # Don't greet on server connect - wait for them to join our channel
+    
+    def on_user_updated(self, user, actions):
+        """Handle user updates - including channel changes."""
+        # Check if they moved to our channel
+        if "channel_id" in actions:
+            try:
+                my_channel = self.mumble.users.myself["channel_id"]
+                user_name = user.get("name", "Someone")
+                user_session = user.get("session")
+                
+                # Skip if it's us
+                if user_session == self.mumble.users.myself_session:
+                    return
+                
+                # They joined our channel!
+                if actions["channel_id"] == my_channel:
+                    print(f"[Event] {user_name} joined the channel")
+                    self._greet_user(user_name, user_session)
+                    
+            except Exception as e:
+                print(f"[Event] Error handling user update: {e}")
+    
+    def on_user_left(self, user, message):
+        """Handle when a user disconnects."""
+        user_name = user.get("name", "Someone")
+        print(f"[Event] {user_name} left the server")
+        # Could say goodbye here if desired
+    
+    def _greet_user(self, user_name: str, user_id: int):
+        """Generate a greeting for a user who joined the channel."""
+        if not self.llm:
+            # Simple fallback
+            self.speak(f"Hey {user_name}!")
+            return
+        
+        # Get time-appropriate greeting via LLM
+        now = datetime.now()
+        hour = now.hour
+        
+        if 5 <= hour < 12:
+            time_greeting = "morning"
+        elif 12 <= hour < 17:
+            time_greeting = "afternoon"
+        elif 17 <= hour < 21:
+            time_greeting = "evening"
+        else:
+            time_greeting = "late night"
+        
+        # Create a greeting prompt
+        greeting_prompt = f"[System: {user_name} just joined the voice channel. It's {time_greeting}. Give a brief, casual greeting. One sentence max.]"
+        
+        # Generate via LLM (async in background)
+        def generate_greeting():
+            try:
+                response = self._generate_response_sync(user_id, greeting_prompt, user_name)
+                self.speak(response)
+            except Exception as e:
+                print(f"[Greet] Error generating greeting: {e}")
+                # Fallback
+                greetings = [
+                    f"Hey {user_name}!",
+                    f"Oh hey, {user_name}.",
+                    f"Yo {user_name}, what's up?",
+                    f"Hey! {user_name}'s here.",
+                ]
+                self.speak(random.choice(greetings))
+        
+        # Run in background so we don't block
+        self._asr_executor.submit(generate_greeting)
+
     # =========================================================================
     # Lifecycle
     # =========================================================================
