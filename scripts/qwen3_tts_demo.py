@@ -6,6 +6,7 @@
 #     "gradio>=4.0.0",
 # ]
 # [tool.uv]
+# index-strategy = "unsafe-best-match"
 # find-links = ["https://download.pytorch.org/whl/cu124"]
 # extra-index-url = ["https://download.pytorch.org/whl/cu124"]
 # ///
