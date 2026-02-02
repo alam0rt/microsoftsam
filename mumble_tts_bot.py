@@ -1223,6 +1223,10 @@ def main():
     parser.add_argument('--wyoming-stt-port', type=int, default=None,
                         help='Wyoming STT server port (default: 10300)')
     
+    # Model storage settings
+    parser.add_argument('--hf-home', default=None,
+                        help='HuggingFace home directory (where models are cached)')
+    
     args = parser.parse_args()
     
     # Load config file if specified
@@ -1233,6 +1237,16 @@ def main():
             print(f"[Config] Loaded from {args.config}")
         except Exception as e:
             print(f"[Config] Error loading {args.config}: {e}")
+    
+    # Apply model storage paths early, before loading any models
+    # CLI --hf-home overrides config
+    if args.hf_home:
+        os.environ["HF_HOME"] = args.hf_home
+        print(f"[Models] HF_HOME={args.hf_home}")
+    elif config and config.models:
+        applied = config.models.apply_environment()
+        if applied:
+            print(f"[Models] Applied environment: {', '.join(f'{k}={v}' for k, v in applied.items())}")
     
     # Merge config with CLI args (CLI takes precedence)
     # Mumble settings

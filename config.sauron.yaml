@@ -26,3 +26,7 @@ stt:
 bot:
   asr_threshold: 2000
   conversation_timeout: 300
+
+# Model storage paths
+models:
+  hf_home: "/srv/share/public/models"

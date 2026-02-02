@@ -141,6 +141,65 @@ class STTConfig:
 
 
 @dataclass
+class ModelsConfig:
+    """Configuration for model storage and caching.
+    
+    Controls where HuggingFace models and other ML models are stored/cached.
+    These settings are applied as environment variables before loading models.
+    
+    Attributes:
+        hf_home: HuggingFace home directory (sets HF_HOME).
+                 This is the root for all HF-related files including cache.
+        hf_hub_cache: HuggingFace Hub cache directory (sets HF_HUB_CACHE).
+                      Where downloaded model files are stored.
+        transformers_cache: Legacy transformers cache (sets TRANSFORMERS_CACHE).
+                           For older transformers library versions.
+        torch_home: PyTorch home directory (sets TORCH_HOME).
+                    Where PyTorch downloads pretrained models.
+        xdg_cache_home: XDG cache directory (sets XDG_CACHE_HOME).
+                        Fallback cache location on Linux.
+    """
+    hf_home: str | None = None
+    hf_hub_cache: str | None = None
+    transformers_cache: str | None = None
+    torch_home: str | None = None
+    xdg_cache_home: str | None = None
+    
+    def apply_environment(self) -> dict[str, str]:
+        """Apply model paths as environment variables.
+        
+        Call this before loading any HuggingFace or PyTorch models.
+        
+        Returns:
+            Dict of environment variables that were set.
+        """
+        applied = {}
+        
+        if self.hf_home:
+            os.environ["HF_HOME"] = self.hf_home
+            applied["HF_HOME"] = self.hf_home
+        
+        if self.hf_hub_cache:
+            os.environ["HF_HUB_CACHE"] = self.hf_hub_cache
+            os.environ["HUGGINGFACE_HUB_CACHE"] = self.hf_hub_cache  # Legacy alias
+            applied["HF_HUB_CACHE"] = self.hf_hub_cache
+        
+        if self.transformers_cache:
+            os.environ["TRANSFORMERS_CACHE"] = self.transformers_cache
+            applied["TRANSFORMERS_CACHE"] = self.transformers_cache
+        
+        if self.torch_home:
+            os.environ["TORCH_HOME"] = self.torch_home
+            applied["TORCH_HOME"] = self.torch_home
+        
+        if self.xdg_cache_home:
+            os.environ["XDG_CACHE_HOME"] = self.xdg_cache_home
+            applied["XDG_CACHE_HOME"] = self.xdg_cache_home
+        
+        return applied
+
+
+@dataclass
 class BotConfig:
     """Complete bot configuration.
     
@@ -150,12 +209,14 @@ class BotConfig:
         stt: Speech-to-text configuration.
         mumble: Mumble connection configuration.
         bot: Bot behavior configuration.
+        models: Model storage/cache configuration.
     """
     llm: LLMConfig = field(default_factory=LLMConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
     stt: STTConfig = field(default_factory=STTConfig)
     mumble: MumbleConfig = field(default_factory=MumbleConfig)
     bot: PipelineBotConfig = field(default_factory=PipelineBotConfig)
+    models: ModelsConfig = field(default_factory=ModelsConfig)
 
 
 def load_config(path: str | Path | None = None) -> BotConfig:
@@ -195,6 +256,7 @@ def load_config(path: str | Path | None = None) -> BotConfig:
     stt_data = config_data.get("stt", {})
     mumble_data = config_data.get("mumble", {})
     bot_data = config_data.get("bot", {})
+    models_data = config_data.get("models", {})
     
     return BotConfig(
         llm=LLMConfig(**{k: v for k, v in llm_data.items() if v is not None}),
@@ -202,6 +264,7 @@ def load_config(path: str | Path | None = None) -> BotConfig:
         stt=STTConfig(**{k: v for k, v in stt_data.items() if v is not None}),
         mumble=MumbleConfig(**{k: v for k, v in mumble_data.items() if v is not None}),
         bot=PipelineBotConfig(**{k: v for k, v in bot_data.items() if v is not None}),
+        models=ModelsConfig(**{k: v for k, v in models_data.items() if v is not None}),
     )
 
 
@@ -264,6 +327,15 @@ bot:
 stt:
   wyoming_host: null          # e.g., "localhost" for wyoming-faster-whisper
   wyoming_port: 10300         # Wyoming STT server port
+
+# Model storage paths (optional)
+# Use to specify where HuggingFace and PyTorch models are downloaded/cached
+models:
+  # hf_home: "/path/to/huggingface"       # HF_HOME - main HuggingFace directory
+  # hf_hub_cache: "/path/to/hf/hub"       # HF_HUB_CACHE - downloaded model files
+  # transformers_cache: "/path/to/cache"  # TRANSFORMERS_CACHE - legacy location
+  # torch_home: "/path/to/torch"          # TORCH_HOME - PyTorch models
+  # xdg_cache_home: "/path/to/cache"      # XDG_CACHE_HOME - fallback cache
 """
     
     with open(path, "w") as f:
