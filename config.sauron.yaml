@@ -10,7 +10,8 @@ llm:
   temperature: 0.7
 
 tts:
-  ref_audio: "terrain-base-attack.mp3"
+  ref_audio: "raf.wav"
+  #ref_audio: "terrain-base-attack.mp3"
   num_steps: 3  # Reduced from 4 for speed
   speed: 1.0
 
@@ -20,6 +21,11 @@ mumble:
   user: "Adjutant"
 
 stt:
+  provider: "nemotron_nemo"  # Use NVIDIA Nemotron streaming ASR
+  nemotron_model: "nvidia/nemotron-speech-streaming-en-0.6b"
+  nemotron_chunk_ms: 160  # Lower = faster, higher = more accurate (80, 160, 560, 1120)
+  nemotron_device: "cuda"
+  # Fallback Wyoming settings (if Nemotron unavailable)
   wyoming_host: "localhost"
   wyoming_port: 10300
 

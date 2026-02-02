@@ -47,10 +47,28 @@ bot:
   conversation_timeout: 300   # Clear history after 5 minutes of inactivity
   max_response_staleness: 5.0 # Skip responses older than this (increase for slow LLM)
 
-# Wyoming STT (optional - if not set, uses local Whisper)
+# Speech-to-Text configuration
 stt:
+  # Provider options: "local", "wyoming", "sherpa_nemotron", "nemotron_nemo"
+  provider: "local"           # Default: use local Whisper via LuxTTS
+  
+  # Wyoming settings (for provider: "wyoming")
   wyoming_host: null          # e.g., "localhost" for wyoming-faster-whisper
   wyoming_port: 10300
+  
+  # Sherpa-onnx Nemotron settings (for provider: "sherpa_nemotron")
+  # Requires sherpa-onnx installed and model files downloaded
+  # sherpa_encoder: "/path/to/encoder.onnx"
+  # sherpa_decoder: "/path/to/decoder.onnx"
+  # sherpa_joiner: "/path/to/joiner.onnx"
+  # sherpa_tokens: "/path/to/tokens.txt"
+  # sherpa_provider: "cuda"   # or "cpu"
+  
+  # NeMo Nemotron settings (for provider: "nemotron_nemo")
+  # Requires nemo_toolkit installed
+  nemotron_model: "nvidia/nemotron-speech-streaming-en-0.6b"
+  nemotron_chunk_ms: 160      # 80=fastest, 160=balanced, 560/1120=accurate
+  nemotron_device: "cuda"
 
 # Model storage paths (optional)
 # Configure where HuggingFace and PyTorch models are downloaded/cached

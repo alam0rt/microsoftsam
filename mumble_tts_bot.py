@@ -68,6 +68,23 @@ except ImportError:
     WYOMING_AVAILABLE = False
     print("[Warning] Wyoming STT not available. Install with: pip install wyoming")
 
+# Import streaming ASR providers
+try:
+    from mumble_voice_bot.providers.sherpa_nemotron import SherpaNemotronASR, SherpaNemotronConfig
+    SHERPA_NEMOTRON_AVAILABLE = True
+except ImportError:
+    SHERPA_NEMOTRON_AVAILABLE = False
+    SherpaNemotronASR = None
+    SherpaNemotronConfig = None
+
+try:
+    from mumble_voice_bot.providers.nemotron_stt import NemotronStreamingASR, NemotronConfig
+    NEMOTRON_NEMO_AVAILABLE = True
+except ImportError:
+    NEMOTRON_NEMO_AVAILABLE = False
+    NemotronStreamingASR = None
+    NemotronConfig = None
+
 # Import latency optimization components
 try:
     from mumble_voice_bot.latency import LatencyTracker, LatencyLogger, TurnLatency
@@ -255,9 +272,20 @@ class MumbleVoiceBot:
         llm_system_prompt: str = None,
         personality: str = None,
         config_file: str = None,
-        # Wyoming STT configuration
+        # STT configuration
+        stt_provider: str = "local",  # local, wyoming, sherpa_nemotron, nemotron_nemo
         wyoming_stt_host: str = None,
         wyoming_stt_port: int = 10300,
+        # Sherpa Nemotron settings
+        sherpa_encoder: str = None,
+        sherpa_decoder: str = None,
+        sherpa_joiner: str = None,
+        sherpa_tokens: str = None,
+        sherpa_provider: str = "cuda",
+        # NeMo Nemotron settings
+        nemotron_model: str = "nvidia/nemotron-speech-streaming-en-0.6b",
+        nemotron_chunk_ms: int = 160,
+        nemotron_device: str = "cuda",
         # Staleness configuration
         max_response_staleness: float = 5.0,
     ):
@@ -333,13 +361,67 @@ class MumbleVoiceBot:
         os.makedirs(self.voices_dir, exist_ok=True)
         self._load_reference_voice(reference_audio)
         
-        # Initialize Wyoming STT (if configured)
+        # Initialize STT provider
+        self.stt_provider = stt_provider
         self.wyoming_stt = None
-        if wyoming_stt_host and WYOMING_AVAILABLE:
-            print(f"[STT] Using Wyoming STT at {wyoming_stt_host}:{wyoming_stt_port}")
-            self.wyoming_stt = WyomingSTTSync(host=wyoming_stt_host, port=wyoming_stt_port)
-        elif wyoming_stt_host and not WYOMING_AVAILABLE:
-            print("[Warning] Wyoming STT requested but wyoming package not installed")
+        self.streaming_stt = None
+        
+        if stt_provider == "wyoming":
+            if wyoming_stt_host and WYOMING_AVAILABLE:
+                print(f"[STT] Using Wyoming STT at {wyoming_stt_host}:{wyoming_stt_port}")
+                self.wyoming_stt = WyomingSTTSync(host=wyoming_stt_host, port=wyoming_stt_port)
+            elif not WYOMING_AVAILABLE:
+                print("[Warning] Wyoming STT requested but wyoming package not installed")
+                print("[STT] Falling back to local Whisper")
+                self.stt_provider = "local"
+            else:
+                print("[Warning] Wyoming STT provider selected but no host configured")
+                print("[STT] Falling back to local Whisper")
+                self.stt_provider = "local"
+                
+        elif stt_provider == "sherpa_nemotron":
+            if SHERPA_NEMOTRON_AVAILABLE:
+                print(f"[STT] Using Sherpa Nemotron (provider={sherpa_provider})")
+                config = SherpaNemotronConfig(
+                    encoder_path=sherpa_encoder or "nemotron-encoder.onnx",
+                    decoder_path=sherpa_decoder or "nemotron-decoder.onnx",
+                    joiner_path=sherpa_joiner or "nemotron-joiner.onnx",
+                    tokens_path=sherpa_tokens or "tokens.txt",
+                    provider=sherpa_provider,
+                )
+                self.streaming_stt = SherpaNemotronASR(config)
+                # Try to initialize
+                if not self.streaming_stt.initialize():
+                    print("[Warning] Failed to initialize Sherpa Nemotron")
+                    print("[STT] Falling back to local Whisper")
+                    self.streaming_stt = None
+                    self.stt_provider = "local"
+            else:
+                print("[Warning] Sherpa Nemotron requested but sherpa-onnx not installed")
+                print("[STT] Falling back to local Whisper")
+                self.stt_provider = "local"
+                
+        elif stt_provider == "nemotron_nemo":
+            if NEMOTRON_NEMO_AVAILABLE:
+                print(f"[STT] Using NeMo Nemotron ({nemotron_model}, chunk={nemotron_chunk_ms}ms)")
+                config = NemotronConfig(
+                    model_name=nemotron_model,
+                    chunk_size_ms=nemotron_chunk_ms,
+                    device=nemotron_device,
+                )
+                self.streaming_stt = NemotronStreamingASR(config)
+                # Note: NeMo model loads lazily on first use
+            else:
+                print("[Warning] NeMo Nemotron requested but nemo_toolkit not installed")
+                print("[STT] Falling back to local Whisper")
+                self.stt_provider = "local"
+                
+        elif stt_provider == "local":
+            print("[STT] Using local Whisper via LuxTTS")
+        else:
+            print(f"[Warning] Unknown STT provider: {stt_provider}")
+            print("[STT] Falling back to local Whisper")
+            self.stt_provider = "local"
         
         # Initialize LLM
         self.llm = None
@@ -825,12 +907,12 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             tracker.asr_start()
         
         try:
-            # Use Wyoming STT if available, otherwise fall back to local Whisper
-            if self.wyoming_stt:
-                # Convert float32 to int16 PCM bytes for Wyoming
-                audio_16k_int16 = (audio_16k * 32767).astype(np.int16)
-                pcm_16k_bytes = audio_16k_int16.tobytes()
-                
+            # Convert float32 to int16 PCM bytes for external STT providers
+            audio_16k_int16 = (audio_16k * 32767).astype(np.int16)
+            pcm_16k_bytes = audio_16k_int16.tobytes()
+            
+            # Select STT provider
+            if self.stt_provider == "wyoming" and self.wyoming_stt:
                 stt_result = self.wyoming_stt.transcribe(
                     audio_data=pcm_16k_bytes,
                     sample_rate=16000,
@@ -839,6 +921,18 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                     language="en",
                 )
                 text = stt_result.text.strip()
+                
+            elif self.stt_provider in ("sherpa_nemotron", "nemotron_nemo") and self.streaming_stt:
+                # Use streaming STT provider (synchronous transcription)
+                stt_result = asyncio.run(self.streaming_stt.transcribe(
+                    audio_data=pcm_16k_bytes,
+                    sample_rate=16000,
+                    sample_width=2,
+                    channels=1,
+                    language="en",
+                ))
+                text = stt_result.text.strip()
+                
             else:
                 # Use local Whisper via LuxTTS transcriber
                 result = self.tts.transcriber(audio_16k)
@@ -1281,9 +1375,22 @@ def main():
                 llm_system_prompt = f.read()
             print(f"[LLM] Loaded prompt from {prompt_path}")
     
-    # Wyoming STT settings
+    # STT settings
+    stt_provider = (config.stt.provider if config else None) or "local"
     wyoming_stt_host = args.wyoming_stt_host or (config.stt.wyoming_host if config else None)
     wyoming_stt_port = args.wyoming_stt_port or (config.stt.wyoming_port if config else None) or 10300
+    
+    # Sherpa Nemotron settings
+    sherpa_encoder = (config.stt.sherpa_encoder if config else None)
+    sherpa_decoder = (config.stt.sherpa_decoder if config else None)
+    sherpa_joiner = (config.stt.sherpa_joiner if config else None)
+    sherpa_tokens = (config.stt.sherpa_tokens if config else None)
+    sherpa_provider = (config.stt.sherpa_provider if config else None) or "cuda"
+    
+    # NeMo Nemotron settings
+    nemotron_model = (config.stt.nemotron_model if config else None) or "nvidia/nemotron-speech-streaming-en-0.6b"
+    nemotron_chunk_ms = (config.stt.nemotron_chunk_ms if config else None) or 160
+    nemotron_device = (config.stt.nemotron_device if config else None) or "cuda"
     
     # Staleness settings
     max_response_staleness = (config.bot.max_response_staleness if config else None) or 5.0
@@ -1308,8 +1415,17 @@ def main():
         llm_system_prompt=llm_system_prompt,
         personality=personality,
         config_file=args.config,
+        stt_provider=stt_provider,
         wyoming_stt_host=wyoming_stt_host,
         wyoming_stt_port=wyoming_stt_port,
+        sherpa_encoder=sherpa_encoder,
+        sherpa_decoder=sherpa_decoder,
+        sherpa_joiner=sherpa_joiner,
+        sherpa_tokens=sherpa_tokens,
+        sherpa_provider=sherpa_provider,
+        nemotron_model=nemotron_model,
+        nemotron_chunk_ms=nemotron_chunk_ms,
+        nemotron_device=nemotron_device,
         max_response_staleness=max_response_staleness,
     )
     
