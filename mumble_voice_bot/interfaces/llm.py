@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import AsyncIterator
 
 
 @dataclass
@@ -45,6 +46,26 @@ class LLMProvider(ABC):
             Exception: If the LLM request fails.
         """
         pass
+    
+    async def chat_stream(
+        self,
+        messages: list[dict],
+        context: dict | None = None
+    ) -> AsyncIterator[str]:
+        """Stream chat completion tokens.
+        
+        Default implementation falls back to non-streaming.
+        Subclasses should override this for true streaming support.
+        
+        Args:
+            messages: List of message dicts with 'role' and 'content' keys.
+            context: Optional context dict for provider-specific options.
+        
+        Yields:
+            Text chunks as they arrive from the API.
+        """
+        response = await self.chat(messages, context)
+        yield response.content
     
     @abstractmethod
     async def is_available(self) -> bool:

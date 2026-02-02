@@ -9,6 +9,12 @@ from mumble_voice_bot.providers.wyoming_tts import WyomingTTS, WyomingTTSSync
 from mumble_voice_bot.config import BotConfig, load_config
 from mumble_voice_bot.pipeline import VoicePipeline, PipelineConfig
 
+# Latency optimization components
+from mumble_voice_bot.latency import TurnLatency, LatencyTracker, LatencyLogger
+from mumble_voice_bot.turn_controller import TurnController, TurnState
+from mumble_voice_bot.transcript_stabilizer import TranscriptStabilizer, StreamingTranscriptBuffer
+from mumble_voice_bot.phrase_chunker import PhraseChunker, SentenceChunker
+
 __all__ = [
     # Interfaces
     "LLMProvider",
@@ -30,4 +36,14 @@ __all__ = [
     # Pipeline
     "VoicePipeline",
     "PipelineConfig",
+    # Latency optimization
+    "TurnLatency",
+    "LatencyTracker",
+    "LatencyLogger",
+    "TurnController",
+    "TurnState",
+    "TranscriptStabilizer",
+    "StreamingTranscriptBuffer",
+    "PhraseChunker",
+    "SentenceChunker",
 ]

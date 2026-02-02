@@ -68,15 +68,68 @@ except ImportError:
     WYOMING_AVAILABLE = False
     print("[Warning] Wyoming STT not available. Install with: pip install wyoming")
 
+# Import latency optimization components
+try:
+    from mumble_voice_bot.latency import LatencyTracker, LatencyLogger, TurnLatency
+    from mumble_voice_bot.turn_controller import TurnController, TurnState
+    LATENCY_TRACKING_AVAILABLE = True
+except ImportError as e:
+    LATENCY_TRACKING_AVAILABLE = False
+    print(f"[Warning] Latency tracking not available: {e}")
+
 
 # =============================================================================
 # StreamingLuxTTS - Subclass that adds streaming and fixes upstream issues
 # =============================================================================
 
-def split_into_sentences(text: str) -> List[str]:
-    """Split text into sentences for streaming TTS."""
-    sentences = re.split(r'(?<=[.!?;:,])\s+', text.strip())
-    return [s.strip() for s in sentences if s.strip()]
+def split_into_sentences(text: str, max_chars: int = 120) -> List[str]:
+    """
+    Split text into speakable chunks optimized for streaming TTS.
+    
+    Strategy:
+    - Split on sentence boundaries first
+    - Split long sentences on clause boundaries
+    - Ensure minimum chunk size for natural speech
+    
+    Args:
+        text: The text to split.
+        max_chars: Maximum characters per chunk.
+        
+    Returns:
+        List of text chunks suitable for TTS.
+    """
+    MIN_CHUNK = 20  # Don't create tiny chunks
+    
+    # First pass: split on sentence endings
+    sentence_pattern = r'(?<=[.!?])\s+'
+    sentences = re.split(sentence_pattern, text.strip())
+    
+    chunks = []
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+            
+        if len(sentence) <= max_chars:
+            chunks.append(sentence)
+        else:
+            # Split long sentences on clause boundaries
+            clause_pattern = r'(?<=[,;:])\s+'
+            clauses = re.split(clause_pattern, sentence)
+            
+            # Merge tiny clauses
+            current = ""
+            for clause in clauses:
+                if len(current) + len(clause) < MIN_CHUNK:
+                    current += (" " if current else "") + clause
+                else:
+                    if current:
+                        chunks.append(current)
+                    current = clause
+            if current:
+                chunks.append(current)
+    
+    return [c.strip() for c in chunks if c.strip()]
 
 
 class StreamingLuxTTS(LuxTTS):
@@ -249,6 +302,20 @@ class MumbleVoiceBot:
         self._asr_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ASR")  # Allow 2 workers
         self._tts_queue = queue.Queue()
         self._tts_lock = threading.Lock()
+        
+        # Latency tracking and turn control
+        if LATENCY_TRACKING_AVAILABLE:
+            self.latency_logger = LatencyLogger()
+            self.turn_controller = TurnController()
+            # Register barge-in callback to clear audio output
+            self.turn_controller.on_barge_in(self._handle_barge_in)
+            print("[Latency] Tracking enabled - logging to latency.jsonl")
+        else:
+            self.latency_logger = None
+            self.turn_controller = None
+        
+        # Current latency tracker for in-progress turn
+        self._current_tracker: LatencyTracker = None
         
         # Start TTS worker
         self._tts_worker_thread = threading.Thread(
@@ -612,6 +679,19 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             return asyncio.run(self._generate_response(user_id, text, user_name))
     
     # =========================================================================
+    # Barge-in Handling
+    # =========================================================================
+    
+    def _handle_barge_in(self):
+        """Handle barge-in: stop current TTS playback."""
+        try:
+            # Clear the Mumble output buffer
+            self.mumble.sound_output.clear()
+            print("[Barge-in] Cleared audio output buffer")
+        except Exception as e:
+            print(f"[Barge-in] Error clearing buffer: {e}")
+    
+    # =========================================================================
     # Audio Processing
     # =========================================================================
     
@@ -630,6 +710,11 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             bar = '-' * threshold_pos + '+' * max(0, bar_width - threshold_pos) if rms >= self.asr_threshold else '-' * bar_width
             print(f'\r[{user_name:12}] RMS: {rms:5d} / {self._max_rms:5d}  |{bar:<50}|', end='', flush=True)
         
+        # Barge-in detection: if user speaks while bot is speaking
+        if self.turn_controller and self._speaking.is_set() and rms > self.asr_threshold:
+            if self.turn_controller.request_barge_in():
+                print(f"\n[Barge-in] User {user_name} interrupted bot")
+        
         # Initialize state for new users
         if user_id not in self.audio_buffers:
             self.audio_buffers[user_id] = []
@@ -646,13 +731,22 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             print(f"[ASR] Processing {buffer_duration:.1f}s chunk from {user_name}...")
             audio_data = list(self.audio_buffers[user_id])
             self.audio_buffers[user_id] = []
-            self._asr_executor.submit(self._process_speech, user.copy(), user_id, audio_data, True)
+            # Pass current tracker (may be None if speech just started)
+            tracker = self._current_tracker
+            self._asr_executor.submit(self._process_speech, user.copy(), user_id, audio_data, True, tracker)
             return  # Don't process this chunk further
         
         # Speech detection
         if rms > self.asr_threshold:
             if not self.audio_buffers[user_id]:
                 self.speech_start_time[user_id] = current_time
+                # Start new latency tracker
+                if LATENCY_TRACKING_AVAILABLE and self.latency_logger:
+                    self._current_tracker = LatencyTracker(str(user_id), self.latency_logger)
+                    self._current_tracker.vad_start()
+                # Update turn controller
+                if self.turn_controller:
+                    self.turn_controller.start_listening(str(user_id))
             
             self.audio_buffers[user_id].append(sound_chunk.pcm)
             self.speech_active_until[user_id] = current_time + self.speech_hold_duration
@@ -666,9 +760,20 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 if self.debug_rms:
                     print()
                 
+                # Mark VAD end in latency tracker
+                if self._current_tracker:
+                    self._current_tracker.vad_end()
+                
+                # Update turn controller
+                if self.turn_controller:
+                    self.turn_controller.start_processing()
+                
                 audio_data = list(self.audio_buffers[user_id])
                 self.audio_buffers[user_id] = []
-                self._asr_executor.submit(self._process_speech, user.copy(), user_id, audio_data, False)
+                # Pass the current tracker to the processing function
+                tracker = self._current_tracker
+                self._current_tracker = None
+                self._asr_executor.submit(self._process_speech, user.copy(), user_id, audio_data, False, tracker)
     
     def _get_buffer_duration(self, user_id) -> float:
         """Calculate buffered audio duration in seconds."""
@@ -677,7 +782,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         total_bytes = sum(len(chunk) for chunk in self.audio_buffers[user_id])
         return total_bytes / (48000 * 2)  # 48kHz, 16-bit mono
     
-    def _process_speech(self, user: dict, user_id: int, audio_chunks: list, is_continuation: bool = False):
+    def _process_speech(self, user: dict, user_id: int, audio_chunks: list, is_continuation: bool = False, tracker: 'LatencyTracker' = None):
         """Process speech: transcribe and accumulate, respond on pause."""
         user_name = user.get('name', 'Unknown')
         
@@ -687,7 +792,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         
         if buffer_duration < self.min_speech_duration:
             # Too short - but check if we have pending text to respond to
-            self._maybe_respond(user_id, user_name)
+            self._maybe_respond(user_id, user_name, tracker=tracker)
             return
         
         # Convert and resample
@@ -697,7 +802,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         rms = np.sqrt(np.mean(audio_float ** 2))
         if rms < 0.02:
             # Too quiet - but check pending
-            self._maybe_respond(user_id, user_name)
+            self._maybe_respond(user_id, user_name, tracker=tracker)
             return
         
         # Resample 48kHz -> 16kHz for STT
@@ -712,6 +817,10 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         # Transcribe
         print(f"[ASR] Transcribing {buffer_duration:.1f}s from {user_name}...")
         start_time = time.time()
+        
+        # Mark ASR start in tracker
+        if tracker:
+            tracker.asr_start()
         
         try:
             # Use Wyoming STT if available, otherwise fall back to local Whisper
@@ -735,8 +844,12 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             
             transcribe_time = time.time() - start_time
             
+            # Mark ASR complete in tracker
+            if tracker:
+                tracker.asr_final(text)
+            
             if not text or len(text) < 2:
-                self._maybe_respond(user_id, user_name)
+                self._maybe_respond(user_id, user_name, tracker=tracker)
                 return
             
             print(f"[ASR] {user_name}: \"{text}\" ({transcribe_time:.2f}s)")
@@ -751,12 +864,12 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             
             # If this was triggered by silence (not max duration), respond now
             if not is_continuation:
-                self._maybe_respond(user_id, user_name, force=True)
+                self._maybe_respond(user_id, user_name, force=True, tracker=tracker)
             
         except Exception as e:
             print(f"[Error] Processing failed: {e}")
     
-    def _maybe_respond(self, user_id: int, user_name: str, force: bool = False):
+    def _maybe_respond(self, user_id: int, user_name: str, force: bool = False, tracker: 'LatencyTracker' = None):
         """Respond if we have pending text and enough time has passed."""
         if user_id not in self.pending_text:
             return
@@ -773,6 +886,10 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 # Track when user finished speaking for staleness detection
                 pipeline_start = time.time()
                 
+                # Mark LLM start in tracker
+                if tracker:
+                    tracker.llm_start()
+                
                 print(f"[LLM] Generating response to: \"{text}\"")
                 llm_start = time.time()
                 
@@ -780,9 +897,18 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                     response = self._generate_response_sync(user_id, text, user_name)
                     llm_time = time.time() - llm_start
                     
+                    # Mark LLM complete in tracker
+                    if tracker:
+                        tracker.llm_complete(response)
+                    
                     # Check for staleness - if user said something new, abort
                     if user_id in self.pending_text:
                         print(f"[Pipeline] Aborting - user spoke again during LLM ({llm_time:.2f}s)")
+                        return
+                    
+                    # Check if cancelled by barge-in
+                    if self.turn_controller and self.turn_controller.is_cancelled():
+                        print(f"[Pipeline] Aborting - cancelled by barge-in")
                         return
                     
                     # Check total latency - if too slow, warn
@@ -792,8 +918,8 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                     
                     print(f"[LLM] Response ({llm_time:.2f}s): \"{response}\"")
                     
-                    # Queue TTS with timing metadata
-                    self._tts_queue.put((response, self.voice_prompt, pipeline_start, user_id))
+                    # Queue TTS with timing metadata and tracker
+                    self._tts_queue.put((response, self.voice_prompt, pipeline_start, user_id, tracker))
                     
                 except Exception as e:
                     print(f"[LLM] Error: {e}")
@@ -811,8 +937,11 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             except queue.Empty:
                 continue
             
-            # Unpack with optional timing metadata
-            if len(item) == 4:
+            # Unpack with optional timing metadata and tracker
+            tracker = None
+            if len(item) == 5:
+                text, voice_prompt, pipeline_start, user_id, tracker = item
+            elif len(item) == 4:
                 text, voice_prompt, pipeline_start, user_id = item
             else:
                 text, voice_prompt = item
@@ -825,13 +954,18 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                     print(f"[TTS] Skipping stale response - user spoke again")
                     continue
                 
+                # Check if cancelled by barge-in
+                if self.turn_controller and self.turn_controller.is_cancelled():
+                    print(f"[TTS] Skipping - cancelled by barge-in")
+                    continue
+                
                 # Check if response is too old (> 5 seconds since pipeline start)
                 if pipeline_start and (time.time() - pipeline_start) > 5.0:
                     latency = time.time() - pipeline_start
                     print(f"[TTS] Skipping stale response ({latency:.1f}s old)")
                     continue
                 
-                self._speak_sync(text, voice_prompt, pipeline_start)
+                self._speak_sync(text, voice_prompt, pipeline_start, tracker)
             except Exception as e:
                 print(f"[TTS] Error: {e}")
             finally:
@@ -839,43 +973,75 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         
         print("[TTS] Worker stopped")
     
-    def _speak_sync(self, text: str, voice_prompt: dict, pipeline_start: float = None):
+    def _speak_sync(self, text: str, voice_prompt: dict, pipeline_start: float = None, tracker: 'LatencyTracker' = None):
         """Generate and play speech."""
         self._speaking.set()
         tts_start = time.time()
+        
+        # Mark TTS start in tracker
+        if tracker:
+            tracker.tts_start()
+        
+        # Update turn controller
+        if self.turn_controller:
+            self.turn_controller.start_speaking()
         
         try:
             print(f"[TTS] Generating: \"{text[:50]}{'...' if len(text) > 50 else ''}\"")
             
             first_chunk = True
+            total_audio_samples = 0
+            
             for wav_chunk in self.tts.generate_speech_streaming(
                 text, voice_prompt, num_steps=self.num_steps
             ):
+                # Check for barge-in cancellation
+                if self.turn_controller and self.turn_controller.is_cancelled():
+                    print("[TTS] Cancelled due to barge-in")
+                    break
+                
                 if first_chunk:
                     tts_first_chunk = time.time() - tts_start
                     if pipeline_start:
                         total_latency = time.time() - pipeline_start
                         print(f"[Timing] First audio chunk: TTS={tts_first_chunk:.2f}s, Total={total_latency:.2f}s")
+                    # Mark TTS first audio in tracker
+                    if tracker:
+                        tracker.tts_first_audio()
+                        tracker.playback_start()
                     first_chunk = False
                 
                 wav_float = wav_chunk.numpy().squeeze()
                 wav_float = np.clip(wav_float, -1.0, 1.0)
                 pcm = (wav_float * 32767).astype(np.int16)
+                total_audio_samples += len(pcm)
                 self.mumble.sound_output.add_sound(pcm.tobytes())
             
             tts_total = time.time() - tts_start
+            
+            # Calculate audio duration (24kHz sample rate for LuxTTS output)
+            audio_duration_ms = (total_audio_samples / 24000) * 1000
+            
+            # Mark playback end and finalize tracker
+            if tracker:
+                tracker.playback_end(audio_duration_ms)
+                tracker.finalize()
+            
             if pipeline_start:
                 pipeline_total = time.time() - pipeline_start
                 print(f"[Timing] Complete: TTS={tts_total:.2f}s, Pipeline={pipeline_total:.2f}s")
         finally:
             self._speaking.clear()
+            # Reset turn controller to idle
+            if self.turn_controller:
+                self.turn_controller.reset()
     
     def speak(self, text: str, blocking: bool = False):
         """Queue text to be spoken."""
         if blocking:
-            self._speak_sync(text, self.voice_prompt, time.time())
+            self._speak_sync(text, self.voice_prompt, time.time(), None)
         else:
-            self._tts_queue.put((text, self.voice_prompt, time.time(), None))
+            self._tts_queue.put((text, self.voice_prompt, time.time(), None, None))
     
     # =========================================================================
     # Text Message Handling

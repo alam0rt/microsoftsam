@@ -9,6 +9,10 @@ This provider works with any service that implements the OpenAI Chat Completions
 - LiteLLM
 """
 
+import json
+import re
+from typing import AsyncIterator
+
 import httpx
 
 from mumble_voice_bot.interfaces.llm import LLMProvider, LLMResponse
@@ -148,6 +152,81 @@ class OpenAIChatLLM(LLMProvider):
             model=data.get("model"),
             usage=data.get("usage"),
         )
+    
+    async def chat_stream(
+        self,
+        messages: list[dict],
+        context: dict | None = None
+    ) -> AsyncIterator[str]:
+        """Stream chat completion tokens.
+        
+        Args:
+            messages: List of message dicts with 'role' and 'content' keys.
+            context: Optional context dict (unused).
+            
+        Yields:
+            Text chunks as they arrive from the API.
+        """
+        headers = self._build_headers()
+        body = self._build_request_body(messages)
+        body["stream"] = True
+        
+        # Track if we're inside a <think> block (for models like Qwen3)
+        in_think_block = False
+        
+        async with httpx.AsyncClient() as client:
+            async with client.stream(
+                "POST",
+                self.endpoint,
+                headers=headers,
+                json=body,
+                timeout=self.timeout,
+            ) as response:
+                response.raise_for_status()
+                
+                async for line in response.aiter_lines():
+                    if not line or not line.startswith("data: "):
+                        continue
+                        
+                    data = line[6:]  # Strip "data: " prefix
+                    if data == "[DONE]":
+                        break
+                    
+                    try:
+                        chunk = json.loads(data)
+                        delta = chunk["choices"][0].get("delta", {})
+                        content = delta.get("content", "")
+                        
+                        if not content:
+                            continue
+                        
+                        # Filter out <think>...</think> blocks for models like Qwen3
+                        # Handle block start
+                        if "<think>" in content:
+                            in_think_block = True
+                            # Emit any content before the think tag
+                            pre_think = content.split("<think>")[0]
+                            if pre_think:
+                                yield pre_think
+                            continue
+                        
+                        # Handle block end
+                        if "</think>" in content:
+                            in_think_block = False
+                            # Emit any content after the think tag
+                            post_think = content.split("</think>")[-1]
+                            if post_think:
+                                yield post_think
+                            continue
+                        
+                        # Skip content inside think block
+                        if in_think_block:
+                            continue
+                        
+                        yield content
+                        
+                    except json.JSONDecodeError:
+                        continue
     
     async def is_available(self) -> bool:
         """Check if the LLM service is available.

@@ -9,8 +9,10 @@ The pipeline coordinates:
 import asyncio
 import time
 from dataclasses import dataclass, field
+from typing import AsyncIterator, Any
 
 from mumble_voice_bot.interfaces.llm import LLMProvider, LLMResponse
+from mumble_voice_bot.phrase_chunker import PhraseChunker
 
 
 @dataclass
@@ -405,3 +407,216 @@ class VoicePipeline:
             audio=audio_out,
             latency=latency,
         )
+    
+    async def process_audio_streaming(
+        self,
+        audio,
+        sample_rate: int,
+        user_id: str = "default",
+        voice_prompt: dict = None,
+        num_steps: int = 4,
+    ) -> AsyncIterator[tuple[str, Any]]:
+        """
+        Process audio with streaming LLM and TTS for minimal latency.
+        
+        This method streams LLM tokens through a PhraseChunker and sends
+        complete phrases to TTS as they become available, rather than
+        waiting for the full LLM response.
+        
+        Args:
+            audio: Input audio data.
+            sample_rate: Audio sample rate.
+            user_id: Unique identifier for conversation history.
+            voice_prompt: Voice prompt for TTS.
+            num_steps: Number of TTS diffusion steps.
+        
+        Yields:
+            Tuples of (event_type, data) where event_type is one of:
+            - "transcription": TranscriptionResult
+            - "llm_chunk": str (partial LLM response)
+            - "llm_first_token": float (timestamp of first token)
+            - "tts_audio": audio tensor
+            - "tts_first_audio": float (timestamp of first audio)
+            - "complete": PipelineResult
+        """
+        latency = {}
+        
+        # Step 1: Transcribe (still blocking for now)
+        start = time.time()
+        transcription = await self.transcribe(audio, sample_rate)
+        latency["transcription"] = time.time() - start
+        
+        should_respond, cleaned_text = self._should_respond(transcription.text)
+        if not should_respond:
+            return
+        
+        transcription.text = cleaned_text
+        yield ("transcription", transcription)
+        
+        # Step 2: Stream LLM response
+        self._add_to_history(user_id, "user", cleaned_text)
+        history = self._get_history(user_id)
+        
+        start = time.time()
+        chunker = PhraseChunker()
+        full_response = ""
+        first_token_time = None
+        first_audio_time = None
+        
+        async for token in self.llm.chat_stream(history):
+            if first_token_time is None:
+                first_token_time = time.time()
+                latency["llm_ttft"] = first_token_time - start
+                yield ("llm_first_token", first_token_time)
+            
+            full_response += token
+            yield ("llm_chunk", token)
+            
+            # Check if we have a phrase ready for TTS
+            phrase = chunker.add(token)
+            if phrase and voice_prompt is not None:
+                async for audio_chunk in self.synthesize_streaming(
+                    phrase, voice_prompt, num_steps
+                ):
+                    if first_audio_time is None:
+                        first_audio_time = time.time()
+                        latency["tts_ttfa"] = first_audio_time - start
+                        yield ("tts_first_audio", first_audio_time)
+                    yield ("tts_audio", audio_chunk)
+        
+        # Flush any remaining text
+        remaining = chunker.flush()
+        if remaining and voice_prompt is not None:
+            async for audio_chunk in self.synthesize_streaming(
+                remaining, voice_prompt, num_steps
+            ):
+                if first_audio_time is None:
+                    first_audio_time = time.time()
+                    latency["tts_ttfa"] = first_audio_time - start
+                    yield ("tts_first_audio", first_audio_time)
+                yield ("tts_audio", audio_chunk)
+        
+        latency["llm_total"] = time.time() - start
+        
+        # Add to history
+        self._add_to_history(user_id, "assistant", full_response)
+        
+        yield ("complete", PipelineResult(
+            transcription=transcription,
+            llm_response=LLMResponse(content=full_response),
+            audio=None,  # Streamed, not collected
+            latency=latency,
+        ))
+    
+    async def process_audio_streaming_asr(
+        self,
+        audio_stream: AsyncIterator[bytes],
+        sample_rate: int,
+        user_id: str = "default",
+        voice_prompt: dict = None,
+        num_steps: int = 4,
+        stt_provider=None,
+    ) -> AsyncIterator[tuple[str, Any]]:
+        """
+        Process audio with streaming ASR, enabling early LLM generation.
+        
+        This overlaps ASR and LLM processing for minimum latency:
+        - ASR streams partial results as user speaks
+        - LLM starts generating on stable partial transcript
+        - TTS starts on first complete phrase from LLM
+        
+        Args:
+            audio_stream: Async iterator yielding PCM audio chunks.
+            sample_rate: Audio sample rate.
+            user_id: Unique identifier for conversation history.
+            voice_prompt: Voice prompt for TTS.
+            num_steps: Number of TTS diffusion steps.
+            stt_provider: Streaming STT provider (must have transcribe_streaming).
+        
+        Yields:
+            Tuples of (event_type, data) where event_type is one of:
+            - "asr_partial": str (partial transcript)
+            - "asr_final": str (final transcript)
+            - "llm_chunk": str (partial LLM response)
+            - "tts_audio": audio tensor
+            - "complete": PipelineResult
+        """
+        if stt_provider is None:
+            raise ValueError("stt_provider required for streaming ASR")
+        
+        latency = {}
+        start = time.time()
+        
+        # Buffer for stable transcript
+        stable_transcript = ""
+        llm_started = False
+        llm_task = None
+        llm_response_chunks = []
+        
+        async for partial, is_final in stt_provider.transcribe_streaming(audio_stream, sample_rate):
+            stable_transcript += partial
+            
+            if is_final:
+                latency["asr"] = time.time() - start
+                yield ("asr_final", stable_transcript)
+            else:
+                yield ("asr_partial", partial)
+                
+                # Start LLM generation early on stable prefix (minimum ~50 chars)
+                if not llm_started and len(stable_transcript) >= 50:
+                    llm_started = True
+                    # Note: In a full implementation, we'd start the LLM here
+                    # and continue feeding ASR results. For now, we wait.
+        
+        # Check if we should respond
+        should_respond, cleaned_text = self._should_respond(stable_transcript)
+        if not should_respond:
+            return
+        
+        # Add to history and generate response
+        self._add_to_history(user_id, "user", cleaned_text)
+        history = self._get_history(user_id)
+        
+        llm_start = time.time()
+        chunker = PhraseChunker()
+        full_response = ""
+        first_token_time = None
+        first_audio_time = None
+        
+        async for token in self.llm.chat_stream(history):
+            if first_token_time is None:
+                first_token_time = time.time()
+                latency["llm_ttft"] = first_token_time - llm_start
+            
+            full_response += token
+            yield ("llm_chunk", token)
+            
+            # Check if we have a phrase ready for TTS
+            phrase = chunker.add(token)
+            if phrase and voice_prompt is not None:
+                async for audio_chunk in self.synthesize_streaming(
+                    phrase, voice_prompt, num_steps
+                ):
+                    if first_audio_time is None:
+                        first_audio_time = time.time()
+                        latency["tts_ttfa"] = first_audio_time - llm_start
+                    yield ("tts_audio", audio_chunk)
+        
+        # Flush remaining
+        remaining = chunker.flush()
+        if remaining and voice_prompt is not None:
+            async for audio_chunk in self.synthesize_streaming(
+                remaining, voice_prompt, num_steps
+            ):
+                yield ("tts_audio", audio_chunk)
+        
+        latency["llm_total"] = time.time() - llm_start
+        
+        self._add_to_history(user_id, "assistant", full_response)
+        
+        yield ("complete", PipelineResult(
+            transcription=TranscriptionResult(text=stable_transcript),
+            llm_response=LLMResponse(content=full_response),
+            audio=None,
+            latency=latency,
+        ))
