@@ -1,0 +1,26 @@
+# Sauron Configuration for Mumble Voice Bot
+
+llm:
+  endpoint: "http://localhost:8100/v1/chat/completions"
+  model: "/model"
+  prompt_file: "prompts/default.md"
+  personality: "advisor"
+  timeout: 30.0
+
+tts:
+  ref_audio: "terrain-base-attack.mp3"
+  num_steps: 4
+  speed: 1.0
+
+mumble:
+  host: "murmur.middleearth.samlockart.com"
+  port: 64738
+  user: "Adjutant"
+
+stt:
+  wyoming_host: "localhost"
+  wyoming_port: 10300
+
+bot:
+  asr_threshold: 2000
+  conversation_timeout: 300
