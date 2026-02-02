@@ -45,6 +45,7 @@ bot:
   asr_threshold: 2000         # RMS threshold for voice activity
   enable_conversation: true   # Enable LLM conversation mode
   conversation_timeout: 300   # Clear history after 5 minutes of inactivity
+  max_response_staleness: 5.0 # Skip responses older than this (increase for slow LLM)
 
 # Wyoming STT (optional - if not set, uses local Whisper)
 stt:

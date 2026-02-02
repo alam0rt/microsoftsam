@@ -258,6 +258,8 @@ class MumbleVoiceBot:
         # Wyoming STT configuration
         wyoming_stt_host: str = None,
         wyoming_stt_port: int = 10300,
+        # Staleness configuration
+        max_response_staleness: float = 5.0,
     ):
         self.host = host
         self.user = user
@@ -282,7 +284,7 @@ class MumbleVoiceBot:
         self.max_speech_duration = 5.0  # force processing after 5 seconds (keeps Whisper fast)
         
         # Response staleness settings
-        self.max_response_staleness = 5.0  # skip responses older than this (seconds)
+        self.max_response_staleness = max_response_staleness  # skip responses older than this (seconds)
         
         # Pending transcriptions (for accumulating long utterances)
         self.pending_text = {}  # user_id -> accumulated text
@@ -959,10 +961,10 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                     print(f"[TTS] Skipping - cancelled by barge-in")
                     continue
                 
-                # Check if response is too old (> 5 seconds since pipeline start)
-                if pipeline_start and (time.time() - pipeline_start) > 5.0:
+                # Check if response is too old
+                if pipeline_start and (time.time() - pipeline_start) > self.max_response_staleness:
                     latency = time.time() - pipeline_start
-                    print(f"[TTS] Skipping stale response ({latency:.1f}s old)")
+                    print(f"[TTS] Skipping stale response ({latency:.1f}s old, limit={self.max_response_staleness}s)")
                     continue
                 
                 self._speak_sync(text, voice_prompt, pipeline_start, tracker)
@@ -1283,6 +1285,9 @@ def main():
     wyoming_stt_host = args.wyoming_stt_host or (config.stt.wyoming_host if config else None)
     wyoming_stt_port = args.wyoming_stt_port or (config.stt.wyoming_port if config else None) or 10300
     
+    # Staleness settings
+    max_response_staleness = (config.bot.max_response_staleness if config else None) or 5.0
+    
     device = args.device if args.device != 'auto' else get_best_device()
     
     bot = MumbleVoiceBot(
@@ -1305,6 +1310,7 @@ def main():
         config_file=args.config,
         wyoming_stt_host=wyoming_stt_host,
         wyoming_stt_port=wyoming_stt_port,
+        max_response_staleness=max_response_staleness,
     )
     
     bot.start()

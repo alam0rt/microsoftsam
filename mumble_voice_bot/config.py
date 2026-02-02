@@ -119,6 +119,8 @@ class PipelineBotConfig:
         asr_threshold: RMS threshold for voice activity detection.
         enable_conversation: Enable LLM conversation mode (vs mimic mode).
         conversation_timeout: Seconds before conversation history is cleared.
+        max_response_staleness: Skip responses older than this (seconds).
+                               Increase if TTS is being skipped due to slow LLM.
     """
     wake_word: str | None = None
     silence_threshold_ms: int = 1500
@@ -126,6 +128,7 @@ class PipelineBotConfig:
     asr_threshold: int = 2000
     enable_conversation: bool = True
     conversation_timeout: float = 300.0  # 5 minutes
+    max_response_staleness: float = 5.0  # Skip responses older than this
 
 
 @dataclass

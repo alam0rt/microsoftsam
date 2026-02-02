@@ -26,6 +26,7 @@ stt:
 bot:
   asr_threshold: 2000
   conversation_timeout: 300
+  max_response_staleness: 15.0  # Skip responses older than this (seconds)
 
 # Model storage paths
 models:
