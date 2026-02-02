@@ -28,8 +28,9 @@ This document outlines a detailed implementation plan for achieving low-latency 
 | **Transcript Stabilizer (for streaming ASR)** | Missing |
 | **PhraseChunker for LLM→TTS** | Missing |
 | **LLM Streaming Responses** | Not implemented |
-| **GPU STT via containerized Wyoming** | Missing |
-| **Alternative streaming ASR (sherpa-onnx)** | Missing |
+| **Nemotron Streaming ASR (NeMo)** | Missing (Phase 2A) |
+| **Nemotron Streaming ASR (sherpa-onnx)** | Missing (Phase 2A alternative) |
+| **GPU STT via containerized Wyoming** | Missing (Phase 2C fallback) |
 
 ---
 
@@ -300,9 +301,9 @@ for wav_chunk in self.tts.generate_speech_streaming(...):
 
 ---
 
-### Phase 1.2 — Transcript Stabilizer (Prep for Streaming ASR)
+### Phase 1.2 — Transcript Stabilizer (Required for Streaming ASR)
 
-This component is preparation for Phase 2B (streaming ASR).
+This component is a **prerequisite for Phase 2A** (Nemotron streaming ASR). Streaming ASR models often revise their output, so we need to emit stable prefixes that won't change.
 
 Create `mumble_voice_bot/transcript_stabilizer.py`:
 
@@ -648,7 +649,388 @@ async def process_audio_streaming(
 
 **This is the biggest latency bottleneck.** CPU Whisper can take 1-3+ seconds.
 
-### Phase 2A (Recommended) — GPU Wyoming via Container
+### Streaming ASR Model Comparison
+
+Before choosing an approach, here's how the options compare:
+
+| Feature | **NVIDIA Nemotron-Speech-0.6B** | **Qwen3-ASR-0.6B** | **Whisper (current)** |
+|---------|--------------------------------|--------------------|-----------------------|
+| **Architecture** | FastConformer + RNNT (cache-aware) | Encoder-Decoder | Encoder-Decoder |
+| **True Streaming** | ✅ Yes (native) | ✅ Yes (native) | ❌ No (chunked only) |
+| **Time-to-First-Token** | **24ms** (80ms chunk) | **92ms** | 1000-3000ms+ |
+| **End-to-End Latency** | 80-160ms (streaming mode) | ~92ms+ | Full utterance wait |
+| **WER (accuracy)** | 7.16-7.84% | Competitive (SOTA claimed) | ~5-8% (depends on model) |
+| **Languages** | English only | 52 languages | 99 languages |
+| **VRAM Usage** | ~1.5-2GB (estimate) | ~1.5-2GB (estimate) | ~1-3GB |
+| **Partial Results** | ✅ Emits as audio streams | ✅ Emits incrementally | ❌ Only final |
+| **Punctuation/Casing** | ✅ Built-in | ✅ Built-in | ✅ Built-in |
+| **License** | CC-BY-4.0 | Apache 2.0 | MIT |
+
+### Why Streaming ASR over GPU Whisper?
+
+| Metric | GPU Whisper | Nemotron Streaming |
+|--------|-------------|-------------------|
+| Latency model | Wait for full utterance | Stream partial results |
+| Time-to-first-token | 500-1500ms | **24-160ms** |
+| Can start LLM early? | No | **Yes** |
+| Architecture fit | Batch-oriented | Voice-agent optimized |
+
+### Streaming Pipeline Architecture
+
+With streaming ASR like Nemotron, you can implement **true streaming overlap**:
+
+```
+User speaks:  |████████████████████████|
+              ↓ (80ms chunks)
+Nemotron:     |p|p|p|p|p|F|           (p=partial, F=final)
+              ↓ (stable prefix after ~200ms)
+LLM starts:       |████████████|
+              ↓ (first tokens after ~400ms from speech start)
+TTS starts:           |████████████████|
+              ↓ (first audio after ~600ms from speech start)
+User hears:               |████████████████████|
+```
+
+Compare to current (Whisper):
+```
+User speaks:  |████████████████████████|
+              ↓ (wait for silence)
+Whisper:                              |████████████|
+              ↓ (2+ seconds)
+LLM starts:                                       |████████████|
+TTS starts:                                                   |████|
+```
+
+**The streaming approach could cut your TTFA by 50-70%!**
+
+### VRAM Budget Check (T1000 8GB)
+
+| Component | VRAM |
+|-----------|------|
+| vLLM (LFM2.5-1.2B, fp16) | ~3GB |
+| LuxTTS | ~1GB |
+| Nemotron-Speech-0.6B | ~1.5GB |
+| **Total** | **~5.5GB** ✅ |
+
+---
+
+### Phase 2A (Recommended) — NVIDIA Nemotron Streaming ASR
+
+For an **English-only voice bot** focused on **minimum latency**, Nemotron is the clear winner:
+
+**Why Nemotron?**
+
+1. **24ms time-to-first-token** — The LLM can start processing almost immediately
+2. **Cache-aware streaming** — Unlike chunked Whisper, latency doesn't grow with audio length
+3. **Configurable chunk sizes** — Tune latency vs accuracy:
+   - 80ms chunks = fastest, ~7.84% WER
+   - 160ms chunks = good balance
+   - 560ms chunks = higher accuracy
+4. **Designed for voice agents** — NVIDIA explicitly targets real-time conversational AI
+5. **Proven at scale** — 560 concurrent streams on H100, stable latency
+
+#### Deployment Approach: In-Process (Simplest)
+
+For a single-user voice bot, **load the model in-process** — no separate service needed:
+
+- Model loads once at bot startup
+- Call directly from your pipeline (no network round-trips)
+- VRAM stays allocated (fine for dedicated bot)
+- Same approach you already use for LuxTTS
+
+**When to use a separate service instead:** Only if you need multiple bots sharing one GPU, or hot-reload without model reload. For this use case, that's overkill.
+
+**Recommended runtime:** sherpa-onnx over NeMo for NixOS:
+- Lighter dependencies (no full NeMo/PyTorch Lightning stack)
+- ONNX runtime is easier to package in Nix
+- Same model, just ONNX format
+
+#### Option 1: Via sherpa-onnx (Recommended for NixOS)
+
+Create `mumble_voice_bot/providers/sherpa_nemotron.py`:
+
+```python
+"""Streaming ASR using Nemotron via sherpa-onnx."""
+
+import sherpa_onnx
+from dataclasses import dataclass
+from typing import AsyncIterator, Optional
+
+from mumble_voice_bot.interfaces.stt import STTProvider, STTResult
+from mumble_voice_bot.transcript_stabilizer import TranscriptStabilizer
+
+
+@dataclass  
+class SherpaNemotronConfig:
+    """Config for sherpa-onnx Nemotron."""
+    encoder_path: str = "nemotron-encoder.onnx"
+    decoder_path: str = "nemotron-decoder.onnx"
+    joiner_path: str = "nemotron-joiner.onnx"
+    tokens_path: str = "tokens.txt"
+    chunk_size: int = 8  # frames
+    provider: str = "cuda"  # or "cpu"
+    num_threads: int = 4
+
+
+class SherpaNemotronASR(STTProvider):
+    """Lightweight Nemotron via sherpa-onnx."""
+    
+    def __init__(self, config: SherpaNemotronConfig = None):
+        self.config = config or SherpaNemotronConfig()
+        self.recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
+            encoder=self.config.encoder_path,
+            decoder=self.config.decoder_path,
+            joiner=self.config.joiner_path,
+            tokens=self.config.tokens_path,
+            num_threads=self.config.num_threads,
+            provider=self.config.provider,
+        )
+        self.stream = None
+        self.stabilizer = TranscriptStabilizer()
+        
+    def start_stream(self):
+        """Start a new recognition stream."""
+        self.stream = self.recognizer.create_stream()
+        self.stabilizer.reset()
+        
+    def feed_audio(self, samples: list[float]) -> Optional[str]:
+        """Feed audio samples, return partial transcript if available."""
+        self.stream.accept_waveform(16000, samples)
+        
+        while self.recognizer.is_ready(self.stream):
+            self.recognizer.decode_stream(self.stream)
+            
+        result = self.recognizer.get_result(self.stream)
+        if result.text:
+            stable_delta, _, _ = self.stabilizer.update(result.text)
+            return stable_delta if stable_delta else None
+        return None
+        
+    def finalize(self) -> str:
+        """Finalize and get final transcript."""
+        self.stream.input_finished()
+        while self.recognizer.is_ready(self.stream):
+            self.recognizer.decode_stream(self.stream)
+        final = self.recognizer.get_result(self.stream).text
+        return self.stabilizer.finalize(final)
+    
+    async def transcribe_streaming(
+        self,
+        audio_stream: AsyncIterator[bytes],
+        sample_rate: int = 16000,
+    ) -> AsyncIterator[tuple[str, bool]]:
+        """Transcribe audio stream, yielding partial results."""
+        import numpy as np
+        
+        self.start_stream()
+        
+        async for chunk_bytes in audio_stream:
+            audio_int16 = np.frombuffer(chunk_bytes, dtype=np.int16)
+            samples = (audio_int16.astype(np.float32) / 32768.0).tolist()
+            
+            partial = self.feed_audio(samples)
+            if partial:
+                yield partial, False
+        
+        final = self.finalize()
+        if final:
+            yield final, True
+    
+    async def transcribe(
+        self,
+        audio_data: bytes,
+        sample_rate: int = 16000,
+        **kwargs
+    ) -> STTResult:
+        """Non-streaming transcription (for compatibility)."""
+        import numpy as np
+        
+        self.start_stream()
+        audio_int16 = np.frombuffer(audio_data, dtype=np.int16)
+        samples = (audio_int16.astype(np.float32) / 32768.0).tolist()
+        
+        self.feed_audio(samples)
+        text = self.finalize()
+        
+        return STTResult(
+            text=text,
+            language="en",
+            duration=len(audio_data) / (sample_rate * 2),
+        )
+    
+    async def is_available(self) -> bool:
+        return self.recognizer is not None
+```
+
+#### Option 2: Via NeMo Framework (Alternative)
+
+If you need full NeMo features or have NeMo already set up:
+
+Create `mumble_voice_bot/providers/nemotron_stt.py`:
+
+```python
+"""Streaming ASR using NVIDIA Nemotron-Speech via NeMo."""
+
+import asyncio
+from dataclasses import dataclass
+from typing import AsyncIterator, Optional
+import torch
+import nemo.collections.asr as nemo_asr
+
+from mumble_voice_bot.interfaces.stt import STTProvider, STTResult
+from mumble_voice_bot.transcript_stabilizer import TranscriptStabilizer
+
+
+@dataclass
+class NemotronConfig:
+    """Configuration for Nemotron streaming ASR."""
+    model_name: str = "nvidia/nemotron-speech-streaming-en-0.6b"
+    chunk_size_ms: int = 160  # 80, 160, 560, or 1120
+    device: str = "cuda"
+
+
+class NemotronStreamingASR(STTProvider):
+    """
+    Streaming ASR using NVIDIA Nemotron-Speech via NeMo.
+    
+    Provides partial results with ~24-160ms latency depending on chunk size.
+    Note: Heavier dependencies than sherpa-onnx. Use Option 1 for simpler deployment.
+    """
+    
+    def __init__(self, config: NemotronConfig = None):
+        self.config = config or NemotronConfig()
+        self.model = None
+        self.stabilizer = TranscriptStabilizer()
+        
+    async def initialize(self):
+        """Load the model (do this once at startup)."""
+        self.model = nemo_asr.models.ASRModel.from_pretrained(
+            self.config.model_name
+        ).to(self.config.device)
+        self.model.eval()
+        
+        chunk_samples = int(self.config.chunk_size_ms * 16)
+        self.model.change_decoding_strategy(
+            decoding_cfg={"strategy": "greedy", "chunk_size": chunk_samples}
+        )
+        
+    async def transcribe_streaming(
+        self,
+        audio_stream: AsyncIterator[bytes],
+        sample_rate: int = 16000,
+    ) -> AsyncIterator[tuple[str, bool]]:
+        """Transcribe audio stream, yielding partial results."""
+        import numpy as np
+        
+        self.stabilizer.reset()
+        cache = None
+        
+        async for chunk_bytes in audio_stream:
+            audio_int16 = np.frombuffer(chunk_bytes, dtype=np.int16)
+            audio_float = torch.from_numpy(
+                audio_int16.astype(np.float32) / 32768.0
+            ).unsqueeze(0).to(self.config.device)
+            
+            with torch.no_grad():
+                transcription, cache = self.model.transcribe_streaming(
+                    audio_float, cache=cache, return_hypotheses=False
+                )
+            
+            if transcription:
+                stable_delta, _, _ = self.stabilizer.update(transcription[0])
+                if stable_delta:
+                    yield stable_delta, False
+        
+        if cache is not None:
+            final_text = self.stabilizer.finalize(transcription[0] if transcription else "")
+            if final_text:
+                yield final_text, True
+    
+    async def is_available(self) -> bool:
+        return self.model is not None
+```
+
+#### Pipeline Integration for Streaming ASR
+
+Modify `mumble_voice_bot/pipeline.py` to support streaming ASR with early LLM kickoff:
+
+```python
+async def process_audio_streaming_asr(
+    self,
+    audio_stream: AsyncIterator[bytes],
+    sample_rate: int,
+    user_id: str = "default",
+    voice_prompt: dict = None,
+    num_steps: int = 4,
+) -> AsyncIterator[tuple[str, any]]:
+    """
+    Process audio with streaming ASR, enabling early LLM generation.
+    
+    This overlaps ASR and LLM processing for minimum latency.
+    
+    Yields:
+        Tuples of (event_type, data) where event_type is one of:
+        - "asr_partial": str (partial transcript)
+        - "asr_final": str (final transcript)
+        - "llm_chunk": str (partial LLM response)
+        - "tts_audio": audio tensor
+        - "complete": PipelineResult
+    """
+    latency = {}
+    start = time.time()
+    
+    # Buffer for stable transcript
+    stable_transcript = ""
+    llm_started = False
+    llm_task = None
+    
+    async for partial, is_final in self.stt.transcribe_streaming(audio_stream, sample_rate):
+        stable_transcript += partial
+        
+        if is_final:
+            latency["asr"] = time.time() - start
+            yield ("asr_final", stable_transcript)
+        else:
+            yield ("asr_partial", partial)
+            
+            # Start LLM generation early on stable prefix (minimum ~50 chars)
+            if not llm_started and len(stable_transcript) >= 50:
+                llm_started = True
+                # Start LLM in background with partial transcript
+                llm_task = asyncio.create_task(
+                    self._stream_llm_response(user_id, stable_transcript, latency)
+                )
+    
+    # Wait for LLM to complete (or finish with full transcript)
+    if llm_task:
+        async for event in llm_task:
+            yield event
+    else:
+        # LLM wasn't started early, run now with full transcript
+        async for event in self._stream_llm_response(user_id, stable_transcript, latency):
+            yield event
+```
+
+---
+
+### Phase 2B (Alternative) — Qwen3-ASR Streaming
+
+Choose Qwen3-ASR instead of Nemotron if you need:
+
+- **Multilingual support** (52 languages vs English-only)
+- **Apache 2.0 license** (vs CC-BY-4.0)
+- Nemotron doesn't work well on your hardware
+
+Qwen3-ASR provides similar streaming capabilities with ~92ms time-to-first-token.
+
+---
+
+### Phase 2C (Fallback) — GPU Wyoming via Container
+
+Keep GPU Whisper as a fallback for:
+- Non-English users (if you ever support them)
+- Nemotron/Qwen3-ASR compatibility issues
+- A/B testing
 
 Your NixOS config has Wyoming on CPU due to CUDA build issues. Solution: Run GPU-enabled Wyoming in a container.
 
@@ -683,59 +1065,6 @@ virtualisation.oci-containers.containers.wyoming-whisper-gpu = {
 #### Option 2: Nix overlay for proper CUDA build
 
 If you want native NixOS, you may need an overlay that properly builds `faster-whisper` with CUDA. This is more complex but avoids containers.
-
-### Phase 2B (Future) — Streaming ASR with sherpa-onnx
-
-For even lower latency, consider a true streaming ASR that emits partial results.
-
-Create `mumble_voice_bot/providers/sherpa_stt.py`:
-
-```python
-"""Streaming ASR using sherpa-onnx."""
-
-# This is a stub for future implementation
-# sherpa-onnx provides streaming models like:
-# - Zipformer transducer models
-# - Paraformer models
-# - Whisper in streaming mode
-
-from mumble_voice_bot.interfaces.stt import STTProvider, STTResult
-from mumble_voice_bot.transcript_stabilizer import TranscriptStabilizer
-
-
-class SherpaSpeechRecognizer(STTProvider):
-    """
-    Streaming ASR using sherpa-onnx.
-    
-    Provides partial results with ~100-200ms latency instead of
-    waiting for complete utterance.
-    """
-    
-    def __init__(
-        self,
-        model_path: str,
-        tokens_path: str,
-        provider: str = "cuda",  # or "cpu"
-    ):
-        # TODO: Initialize sherpa-onnx recognizer
-        self.stabilizer = TranscriptStabilizer()
-        raise NotImplementedError("sherpa-onnx integration not yet implemented")
-    
-    async def transcribe_streaming(
-        self,
-        audio_stream,
-        sample_rate: int = 16000,
-    ):
-        """
-        Transcribe audio stream, yielding partial results.
-        
-        Yields:
-            Tuples of (stable_text, is_final)
-        """
-        # TODO: Feed audio to sherpa-onnx, get partials
-        # Use self.stabilizer to emit stable prefixes
-        raise NotImplementedError()
-```
 
 ---
 
@@ -891,26 +1220,47 @@ def _speak_sync_buffered(self, text: str, voice_prompt: dict, pipeline_start: fl
 
 | Priority | Phase | Task | Impact | Effort |
 |----------|-------|------|--------|--------|
-| 🔴 1 | 2A | GPU STT (container) | **Very High** | Medium |
+| 🔴 1 | 2A | **Nemotron Streaming ASR** | **Very High** | Medium |
 | 🔴 2 | 1.3 | LLM streaming | **High** | Medium |
-| 🟡 3 | 1.1 | Barge-in support | Medium | Low |
-| 🟡 4 | 0 | Latency instrumentation | Medium | Low |
-| 🟢 5 | 3 | vLLM/prompt tuning | Low-Medium | Low |
-| 🟢 6 | 4 | TTS chunking | Low | Low |
-| ⚪ 7 | 1.2, 2B | Streaming ASR | Future | High |
+| 🔴 3 | 1.2 | Transcript Stabilizer | **High** (needed for 2A) | Low |
+| 🟡 4 | 1.1 | Barge-in support | Medium | Low |
+| 🟡 5 | 0 | Latency instrumentation | Medium | Low |
+| 🟢 6 | 3 | vLLM/prompt tuning | Low-Medium | Low |
+| 🟢 7 | 4 | TTS chunking | Low | Low |
+| ⚪ 8 | 2B | Qwen3-ASR (if multilingual needed) | Alternative | Medium |
+| ⚪ 9 | 2C | GPU Whisper (fallback) | Fallback | Medium |
 
 ---
 
 ## Expected Latency Improvements
 
-| Stage | Current (est.) | After Phase 2A | After All Phases |
-|-------|----------------|----------------|------------------|
-| ASR | 1500-3000ms | 200-500ms | 150-400ms |
+### With Nemotron Streaming ASR (Recommended Path)
+
+| Stage | Current (est.) | After Nemotron (2A) | With Streaming Overlap |
+|-------|----------------|---------------------|------------------------|
+| ASR TTFT | 1500-3000ms | **24-80ms** | **24-80ms** |
+| ASR Total | 2000-3000ms | **200ms** (streaming) | Overlapped with LLM |
+| LLM TTFT | 300-500ms | 300-500ms | 150-300ms (early start) |
+| TTS TTFA | 300-500ms | 300-500ms | 200-400ms |
+| **Total TTFA** | **2100-4000ms** | **600-1200ms** | **400-800ms** |
+
+### With GPU Whisper (Fallback Path)
+
+| Stage | Current (est.) | After GPU Whisper | After All Phases |
+|-------|----------------|-------------------|------------------|
+| ASR | 1500-3000ms | 200-500ms | 200-500ms |
 | LLM TTFT | 300-500ms | 300-500ms | 150-300ms (streaming) |
 | TTS TTFA | 300-500ms | 300-500ms | 200-400ms |
-| **Total TTFA** | **2100-4000ms** | **800-1500ms** | **500-1100ms** |
+| **Total TTFA** | **2100-4000ms** | **800-1500ms** | **550-1200ms** |
 
-The biggest single improvement comes from getting STT onto GPU (Phase 2A).
+### Key Insight: Streaming ASR Enables Overlap
+
+The biggest improvement from Nemotron isn't just faster ASR—it's the ability to **overlap stages**:
+
+1. **Without streaming ASR**: Each stage waits for the previous to complete
+2. **With streaming ASR**: LLM starts on stable partial transcript while user is still speaking
+
+This architectural change can cut TTFA by **50-70%** compared to even GPU Whisper.
 
 ---
 
@@ -923,7 +1273,8 @@ mumble_voice_bot/
 ├── transcript_stabilizer.py  # Phase 1.2: For streaming ASR
 ├── phrase_chunker.py    # Phase 1.3: LLM→TTS chunking
 └── providers/
-    └── sherpa_stt.py    # Phase 2B: Streaming ASR (future)
+    ├── nemotron_stt.py      # Phase 2A: Nemotron via NeMo (recommended)
+    └── sherpa_nemotron.py   # Phase 2A: Nemotron via sherpa-onnx (lighter)
 
 scripts/
 └── analyze_latency.py   # Phase 0: Latency analysis
