@@ -49,6 +49,8 @@ class LLMConfig:
         model: Model identifier to use.
         api_key: Optional API key for authentication.
         system_prompt: System prompt for the assistant persona.
+        prompt_file: Path to a prompt file (overrides system_prompt if set).
+        personality: Personality name or path (combined with prompt).
         timeout: Request timeout in seconds.
         max_tokens: Maximum tokens in response (optional).
         temperature: Sampling temperature (optional).
@@ -61,6 +63,8 @@ class LLMConfig:
         "Keep responses concise and conversational (1-3 sentences). "
         "Be friendly but not overly verbose - this is voice, not text."
     )
+    prompt_file: str | None = None
+    personality: str | None = None
     timeout: float = 30.0
     max_tokens: int | None = None
     temperature: float | None = None
@@ -125,17 +129,31 @@ class PipelineBotConfig:
 
 
 @dataclass
+class STTConfig:
+    """Configuration for speech-to-text.
+    
+    Attributes:
+        wyoming_host: Wyoming STT server host (None = use local Whisper).
+        wyoming_port: Wyoming STT server port.
+    """
+    wyoming_host: str | None = None
+    wyoming_port: int = 10300
+
+
+@dataclass
 class BotConfig:
     """Complete bot configuration.
     
     Attributes:
         llm: LLM provider configuration.
         tts: Text-to-speech configuration.
+        stt: Speech-to-text configuration.
         mumble: Mumble connection configuration.
         bot: Bot behavior configuration.
     """
     llm: LLMConfig = field(default_factory=LLMConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
+    stt: STTConfig = field(default_factory=STTConfig)
     mumble: MumbleConfig = field(default_factory=MumbleConfig)
     bot: PipelineBotConfig = field(default_factory=PipelineBotConfig)
 
@@ -174,12 +192,14 @@ def load_config(path: str | Path | None = None) -> BotConfig:
     # Build config objects
     llm_data = config_data.get("llm", {})
     tts_data = config_data.get("tts", {})
+    stt_data = config_data.get("stt", {})
     mumble_data = config_data.get("mumble", {})
     bot_data = config_data.get("bot", {})
     
     return BotConfig(
         llm=LLMConfig(**{k: v for k, v in llm_data.items() if v is not None}),
         tts=TTSConfig(**{k: v for k, v in tts_data.items() if v is not None}),
+        stt=STTConfig(**{k: v for k, v in stt_data.items() if v is not None}),
         mumble=MumbleConfig(**{k: v for k, v in mumble_data.items() if v is not None}),
         bot=PipelineBotConfig(**{k: v for k, v in bot_data.items() if v is not None}),
     )
@@ -200,10 +220,20 @@ llm:
   endpoint: "http://localhost:11434/v1/chat/completions"
   model: "llama3.2:3b"
   api_key: "${LLM_API_KEY}"  # Optional, set via environment
+  
+  # Prompt configuration (choose one):
+  # Option 1: Inline system prompt
   system_prompt: |
     You are a helpful voice assistant in a Mumble voice chat.
     Keep responses concise and conversational (1-3 sentences).
     Be friendly but not overly verbose - this is voice, not text.
+  
+  # Option 2: Load prompt from file (overrides system_prompt)
+  # prompt_file: "prompts/default.md"
+  
+  # Option 3: Add a personality on top of the prompt
+  # personality: "imperial"  # Loads personalities/imperial.md
+  
   timeout: 30.0
   # max_tokens: 256  # Optional, limit response length
   # temperature: 0.7  # Optional, control randomness
@@ -230,6 +260,10 @@ bot:
   asr_threshold: 2000         # RMS threshold for voice activity
   enable_conversation: true   # Enable LLM conversation mode
   conversation_timeout: 300   # Clear history after 5 minutes of inactivity
+
+stt:
+  wyoming_host: null          # e.g., "localhost" for wyoming-faster-whisper
+  wyoming_port: 10300         # Wyoming STT server port
 """
     
     with open(path, "w") as f:

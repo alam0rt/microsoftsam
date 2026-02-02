@@ -1,0 +1,52 @@
+# Mumble Voice Bot Configuration
+# Copy to config.yaml and customize for your setup
+# Environment variables can be used with ${VAR_NAME} syntax
+
+llm:
+  # OpenAI-compatible endpoint (works with Ollama, vLLM, OpenAI, etc.)
+  endpoint: "http://localhost:11434/v1/chat/completions"
+  model: "llama3.2:3b"
+  api_key: "${LLM_API_KEY}"  # Optional, set via environment
+  
+  # Prompt configuration (choose one):
+  # Option 1: Inline system prompt
+  system_prompt: |
+    You are a helpful voice assistant in a Mumble voice chat.
+    Keep responses concise and conversational (1-3 sentences).
+    Be friendly but not overly verbose - this is voice, not text.
+  
+  # Option 2: Load prompt from file (overrides system_prompt)
+  # prompt_file: "prompts/default.md"
+  
+  # Option 3: Add a personality on top of the prompt
+  # personality: "imperial"  # Loads personalities/imperial.md
+  
+  timeout: 30.0
+  # max_tokens: 256  # Optional, limit response length
+  # temperature: 0.7  # Optional, control randomness
+
+tts:
+  ref_audio: "reference.wav"  # Reference audio for voice cloning
+  ref_duration: 5.0           # Seconds of reference to use
+  num_steps: 4                # Quality vs speed (3-4 recommended)
+  speed: 1.0                  # Playback speed
+
+mumble:
+  host: "localhost"
+  port: 64738
+  user: "VoiceBot"
+  password: null
+  channel: null
+
+bot:
+  wake_word: null             # e.g., "hey bot" - if null, responds to all speech
+  silence_threshold_ms: 1500  # Silence before processing speech
+  max_recording_ms: 30000     # Max speech duration
+  asr_threshold: 2000         # RMS threshold for voice activity
+  enable_conversation: true   # Enable LLM conversation mode
+  conversation_timeout: 300   # Clear history after 5 minutes of inactivity
+
+# Wyoming STT (optional - if not set, uses local Whisper)
+stt:
+  wyoming_host: null          # e.g., "localhost" for wyoming-faster-whisper
+  wyoming_port: 10300
