@@ -228,6 +228,9 @@ class MumbleVoiceBot:
         self.min_speech_duration = 0.3  # minimum seconds to transcribe
         self.max_speech_duration = 5.0  # force processing after 5 seconds (keeps Whisper fast)
         
+        # Response staleness settings
+        self.max_response_staleness = 5.0  # skip responses older than this (seconds)
+        
         # Pending transcriptions (for accumulating long utterances)
         self.pending_text = {}  # user_id -> accumulated text
         self.pending_text_time = {}  # user_id -> timestamp of last text
@@ -750,17 +753,34 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         # Respond if forced or if enough time has passed
         if force or time_since_last >= self.pending_text_timeout:
             text = self.pending_text.pop(user_id, "")
-            self.pending_text_time.pop(user_id, None)
+            speech_end_time = self.pending_text_time.pop(user_id, current_time)
             
             if text and self.llm:
+                # Track when user finished speaking for staleness detection
+                pipeline_start = time.time()
+                
                 print(f"[LLM] Generating response to: \"{text}\"")
                 llm_start = time.time()
                 
                 try:
                     response = self._generate_response_sync(user_id, text, user_name)
                     llm_time = time.time() - llm_start
-                    print(f"[LLM] Response: \"{response}\" ({llm_time:.2f}s)")
-                    self._tts_queue.put((response, self.voice_prompt))
+                    
+                    # Check for staleness - if user said something new, abort
+                    if user_id in self.pending_text:
+                        print(f"[Pipeline] Aborting - user spoke again during LLM ({llm_time:.2f}s)")
+                        return
+                    
+                    # Check total latency - if too slow, warn
+                    total_latency = time.time() - speech_end_time
+                    if total_latency > 3.0:
+                        print(f"[Pipeline] Warning: {total_latency:.1f}s since user stopped speaking")
+                    
+                    print(f"[LLM] Response ({llm_time:.2f}s): \"{response}\"")
+                    
+                    # Queue TTS with timing metadata
+                    self._tts_queue.put((response, self.voice_prompt, pipeline_start, user_id))
+                    
                 except Exception as e:
                     print(f"[LLM] Error: {e}")
     
@@ -773,12 +793,31 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         print("[TTS] Worker started")
         while not self._shutdown.is_set():
             try:
-                text, voice_prompt = self._tts_queue.get(timeout=0.5)
+                item = self._tts_queue.get(timeout=0.5)
             except queue.Empty:
                 continue
             
+            # Unpack with optional timing metadata
+            if len(item) == 4:
+                text, voice_prompt, pipeline_start, user_id = item
+            else:
+                text, voice_prompt = item
+                pipeline_start = None
+                user_id = None
+            
             try:
-                self._speak_sync(text, voice_prompt)
+                # Check staleness before TTS - if user spoke again, skip
+                if user_id is not None and user_id in self.pending_text:
+                    print(f"[TTS] Skipping stale response - user spoke again")
+                    continue
+                
+                # Check if response is too old (> 5 seconds since pipeline start)
+                if pipeline_start and (time.time() - pipeline_start) > 5.0:
+                    latency = time.time() - pipeline_start
+                    print(f"[TTS] Skipping stale response ({latency:.1f}s old)")
+                    continue
+                
+                self._speak_sync(text, voice_prompt, pipeline_start)
             except Exception as e:
                 print(f"[TTS] Error: {e}")
             finally:
@@ -786,29 +825,43 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         
         print("[TTS] Worker stopped")
     
-    def _speak_sync(self, text: str, voice_prompt: dict):
+    def _speak_sync(self, text: str, voice_prompt: dict, pipeline_start: float = None):
         """Generate and play speech."""
         self._speaking.set()
+        tts_start = time.time()
         
         try:
-            print(f"[TTS] Speaking: \"{text[:50]}{'...' if len(text) > 50 else ''}\"")
+            print(f"[TTS] Generating: \"{text[:50]}{'...' if len(text) > 50 else ''}\"")
             
+            first_chunk = True
             for wav_chunk in self.tts.generate_speech_streaming(
                 text, voice_prompt, num_steps=self.num_steps
             ):
+                if first_chunk:
+                    tts_first_chunk = time.time() - tts_start
+                    if pipeline_start:
+                        total_latency = time.time() - pipeline_start
+                        print(f"[Timing] First audio chunk: TTS={tts_first_chunk:.2f}s, Total={total_latency:.2f}s")
+                    first_chunk = False
+                
                 wav_float = wav_chunk.numpy().squeeze()
                 wav_float = np.clip(wav_float, -1.0, 1.0)
                 pcm = (wav_float * 32767).astype(np.int16)
                 self.mumble.sound_output.add_sound(pcm.tobytes())
+            
+            tts_total = time.time() - tts_start
+            if pipeline_start:
+                pipeline_total = time.time() - pipeline_start
+                print(f"[Timing] Complete: TTS={tts_total:.2f}s, Pipeline={pipeline_total:.2f}s")
         finally:
             self._speaking.clear()
     
     def speak(self, text: str, blocking: bool = False):
         """Queue text to be spoken."""
         if blocking:
-            self._speak_sync(text, self.voice_prompt)
+            self._speak_sync(text, self.voice_prompt, time.time())
         else:
-            self._tts_queue.put((text, self.voice_prompt))
+            self._tts_queue.put((text, self.voice_prompt, time.time(), None))
     
     # =========================================================================
     # Text Message Handling
