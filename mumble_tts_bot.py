@@ -56,9 +56,9 @@ try:
     from mumble_voice_bot.providers.openai_llm import OpenAIChatLLM
     from mumble_voice_bot.config import load_config
     LLM_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     LLM_AVAILABLE = False
-    print("[Warning] LLM modules not available. Install with: pip install httpx pyyaml")
+    print(f"[Warning] LLM modules not available: {e}")
 
 # Import Wyoming STT provider
 try:
