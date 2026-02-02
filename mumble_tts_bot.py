@@ -60,6 +60,14 @@ except ImportError:
     LLM_AVAILABLE = False
     print("[Warning] LLM modules not available. Install with: pip install httpx pyyaml")
 
+# Import Wyoming STT provider
+try:
+    from mumble_voice_bot.providers.wyoming_stt import WyomingSTTSync
+    WYOMING_AVAILABLE = True
+except ImportError:
+    WYOMING_AVAILABLE = False
+    print("[Warning] Wyoming STT not available. Install with: pip install wyoming")
+
 
 # =============================================================================
 # StreamingLuxTTS - Subclass that adds streaming and fixes upstream issues
@@ -194,6 +202,9 @@ class MumbleVoiceBot:
         llm_system_prompt: str = None,
         personality: str = None,
         config_file: str = None,
+        # Wyoming STT configuration
+        wyoming_stt_host: str = None,
+        wyoming_stt_port: int = 10300,
     ):
         self.host = host
         self.user = user
@@ -249,6 +260,14 @@ class MumbleVoiceBot:
         # Load voice
         os.makedirs(self.voices_dir, exist_ok=True)
         self._load_reference_voice(reference_audio)
+        
+        # Initialize Wyoming STT (if configured)
+        self.wyoming_stt = None
+        if wyoming_stt_host and WYOMING_AVAILABLE:
+            print(f"[STT] Using Wyoming STT at {wyoming_stt_host}:{wyoming_stt_port}")
+            self.wyoming_stt = WyomingSTTSync(host=wyoming_stt_host, port=wyoming_stt_port)
+        elif wyoming_stt_host and not WYOMING_AVAILABLE:
+            print("[Warning] Wyoming STT requested but wyoming package not installed")
         
         # Initialize LLM
         self.llm = None
@@ -664,10 +683,10 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             self._maybe_respond(user_id, user_name)
             return
         
-        # Resample 48kHz -> 16kHz
+        # Resample 48kHz -> 16kHz for STT
         audio_16k = signal.resample_poly(audio_float, up=1, down=3).astype(np.float32)
         
-        # Normalize for Whisper
+        # Normalize for STT
         rms_16k = np.sqrt(np.mean(audio_16k ** 2))
         if rms_16k > 0.001:
             audio_16k = audio_16k * (0.1 / rms_16k)
@@ -678,8 +697,25 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         start_time = time.time()
         
         try:
-            result = self.tts.transcriber(audio_16k)
-            text = result.get('text', '').strip()
+            # Use Wyoming STT if available, otherwise fall back to local Whisper
+            if self.wyoming_stt:
+                # Convert float32 to int16 PCM bytes for Wyoming
+                audio_16k_int16 = (audio_16k * 32767).astype(np.int16)
+                pcm_16k_bytes = audio_16k_int16.tobytes()
+                
+                stt_result = self.wyoming_stt.transcribe(
+                    audio_data=pcm_16k_bytes,
+                    sample_rate=16000,
+                    sample_width=2,
+                    channels=1,
+                    language="en",
+                )
+                text = stt_result.text.strip()
+            else:
+                # Use local Whisper via LuxTTS transcriber
+                result = self.tts.transcriber(audio_16k)
+                text = result.get('text', '').strip()
+            
             transcribe_time = time.time() - start_time
             
             if not text or len(text) < 2:
@@ -946,6 +982,12 @@ def main():
     parser.add_argument('--config', default=None,
                         help='Path to config.yaml')
     
+    # Wyoming STT settings
+    parser.add_argument('--wyoming-stt-host', default=None,
+                        help='Wyoming STT server host (e.g., localhost). If set, uses Wyoming instead of local Whisper')
+    parser.add_argument('--wyoming-stt-port', type=int, default=10300,
+                        help='Wyoming STT server port (default: 10300)')
+    
     args = parser.parse_args()
     
     device = args.device if args.device != 'auto' else get_best_device()
@@ -968,6 +1010,8 @@ def main():
         llm_system_prompt=args.llm_system_prompt,
         personality=args.personality,
         config_file=args.config,
+        wyoming_stt_host=args.wyoming_stt_host,
+        wyoming_stt_port=args.wyoming_stt_port,
     )
     
     bot.start()

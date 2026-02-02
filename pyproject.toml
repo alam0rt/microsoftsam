@@ -54,22 +54,31 @@ dependencies = [
     # LLM integration
     "httpx>=0.27",
     "pyyaml>=6.0",
+    # Wyoming protocol
+    "wyoming>=1.5.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest",
-    "pytest-asyncio>=0.23",
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4.0",
 ]
 
 [project.scripts]
 mumble-tts-bot = "mumble_tts_bot:main"
+wyoming-luxtts = "mumble_voice_bot.providers.wyoming_tts_server:main"
 
 [tool.setuptools]
 py-modules = ["mumble_tts_bot"]
 packages = ["mumble_voice_bot", "mumble_voice_bot.interfaces", "mumble_voice_bot.providers"]
 # Include vendored pymumble_py3 in the package path
 package-dir = {"pymumble_py3" = "vendor/botamusique/pymumble_py3"}
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-v --cov=mumble_voice_bot --cov-report=term-missing"
 
 [tool.uv]
 # Use find-links for piper-phonemize which has wheels on a separate index

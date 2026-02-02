@@ -1,0 +1,107 @@
+version: "3.8"
+
+services:
+  # Wyoming-compatible STT server using Faster Whisper
+  wyoming-faster-whisper:
+    image: rhasspy/wyoming-faster-whisper
+    ports:
+      - "10300:10300"
+    command: --model base --language en --uri tcp://0.0.0.0:10300
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Wyoming TTS server wrapping LuxTTS (build from this repo)
+  wyoming-luxtts:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "10400:10400"
+    volumes:
+      - ./reference.wav:/app/reference.wav:ro
+      - ./voices:/app/voices
+    command: >
+      python -m mumble_voice_bot.providers.wyoming_tts_server
+      --host 0.0.0.0
+      --port 10400
+      --reference /app/reference.wav
+      --device cuda
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # vLLM server for LLM inference (optional - use if you want local LLM)
+  # vllm:
+  #   image: vllm/vllm-openai:latest
+  #   ports:
+  #     - "8000:8000"
+  #   command: >
+  #     --model Qwen/Qwen2.5-7B-Instruct
+  #     --tensor-parallel-size 1
+  #     --gpu-memory-utilization 0.8
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+
+  # Mumble voice bot
+  mumble-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - wyoming-faster-whisper
+      - wyoming-luxtts
+    volumes:
+      - ./reference.wav:/app/reference.wav:ro
+      - ./voices:/app/voices
+      - ./personalities:/app/personalities:ro
+      - ./prompts:/app/prompts:ro
+    environment:
+      - MUMBLE_HOST=${MUMBLE_HOST:-mumble-server}
+      - MUMBLE_PORT=${MUMBLE_PORT:-64738}
+      - MUMBLE_USER=${MUMBLE_USER:-VoiceBot}
+      - MUMBLE_PASSWORD=${MUMBLE_PASSWORD:-}
+      - MUMBLE_CHANNEL=${MUMBLE_CHANNEL:-}
+      - LLM_ENDPOINT=${LLM_ENDPOINT:-http://localhost:11434/v1/chat/completions}
+      - LLM_MODEL=${LLM_MODEL:-llama3.2:3b}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+    command: >
+      python mumble_tts_bot.py
+      --host ${MUMBLE_HOST:-mumble-server}
+      --port ${MUMBLE_PORT:-64738}
+      --user "${MUMBLE_USER:-VoiceBot}"
+      --password "${MUMBLE_PASSWORD:-}"
+      --channel "${MUMBLE_CHANNEL:-}"
+      --reference /app/reference.wav
+      --device cuda
+      --wyoming-stt-host wyoming-faster-whisper
+      --wyoming-stt-port 10300
+      --llm-endpoint ${LLM_ENDPOINT:-http://localhost:11434/v1/chat/completions}
+      --llm-model ${LLM_MODEL:-llama3.2:3b}
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+networks:
+  default:
+    name: mumble-voice-bot
