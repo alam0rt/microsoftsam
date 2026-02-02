@@ -67,8 +67,7 @@
         #   - LLM: vLLM or Ollama (localhost:8000 or 11434)
         devShells.default = pkgs.mkShell {
           buildInputs = [
-            # Python & package management
-            pkgs.python311
+            # Package management (uv manages its own Python)
             pkgs.uv
             
             # Audio libraries (required for Mumble + TTS)
@@ -86,6 +85,9 @@
           ];
 
           shellHook = ''
+            # Prevent Nix Python from polluting the path
+            unset PYTHONPATH
+            
             echo "Mumble TTS Bot Development Environment"
             echo "======================================="
             echo ""
