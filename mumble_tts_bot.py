@@ -944,26 +944,30 @@ def main():
         description='Mumble Voice Bot - LLM-powered voice assistant'
     )
     
+    # Config file (loaded first, CLI args override)
+    parser.add_argument('--config', default=None,
+                        help='Path to config.yaml')
+    
     # Mumble settings
-    parser.add_argument('--host', default='localhost', help='Mumble server')
-    parser.add_argument('--port', type=int, default=64738, help='Mumble port')
-    parser.add_argument('--user', default='VoiceBot', help='Bot username')
-    parser.add_argument('--password', default='', help='Server password')
+    parser.add_argument('--host', default=None, help='Mumble server')
+    parser.add_argument('--port', type=int, default=None, help='Mumble port')
+    parser.add_argument('--user', default=None, help='Bot username')
+    parser.add_argument('--password', default=None, help='Server password')
     parser.add_argument('--channel', default=None, help='Channel to join')
     
     # Voice settings
-    parser.add_argument('--reference', default='reference.wav',
+    parser.add_argument('--reference', default=None,
                         help='Reference audio for voice cloning')
     parser.add_argument('--device', default='auto',
                         choices=['auto', 'cpu', 'cuda', 'mps'],
                         help='Compute device')
-    parser.add_argument('--steps', type=int, default=4,
+    parser.add_argument('--steps', type=int, default=None,
                         help='TTS quality (more steps = better quality, slower)')
-    parser.add_argument('--voices-dir', default='voices',
+    parser.add_argument('--voices-dir', default=None,
                         help='Directory for cached voices')
     
     # VAD settings
-    parser.add_argument('--asr-threshold', type=int, default=2000,
+    parser.add_argument('--asr-threshold', type=int, default=None,
                         help='Voice activity threshold (use --debug-rms to tune)')
     parser.add_argument('--debug-rms', action='store_true',
                         help='Show RMS levels for threshold tuning')
@@ -979,39 +983,81 @@ def main():
                         help='System prompt for the assistant')
     parser.add_argument('--personality', default=None,
                         help='Personality to use (e.g., "imperial", or path to file)')
-    parser.add_argument('--config', default=None,
-                        help='Path to config.yaml')
     
     # Wyoming STT settings
     parser.add_argument('--wyoming-stt-host', default=None,
                         help='Wyoming STT server host (e.g., localhost). If set, uses Wyoming instead of local Whisper')
-    parser.add_argument('--wyoming-stt-port', type=int, default=10300,
+    parser.add_argument('--wyoming-stt-port', type=int, default=None,
                         help='Wyoming STT server port (default: 10300)')
     
     args = parser.parse_args()
     
+    # Load config file if specified
+    config = None
+    if args.config:
+        try:
+            config = load_config(args.config)
+            print(f"[Config] Loaded from {args.config}")
+        except Exception as e:
+            print(f"[Config] Error loading {args.config}: {e}")
+    
+    # Merge config with CLI args (CLI takes precedence)
+    # Mumble settings
+    host = args.host or (config.mumble.host if config else None) or 'localhost'
+    port = args.port or (config.mumble.port if config else None) or 64738
+    user = args.user or (config.mumble.user if config else None) or 'VoiceBot'
+    password = args.password or (config.mumble.password if config else None) or ''
+    channel = args.channel or (config.mumble.channel if config else None)
+    
+    # TTS settings
+    reference = args.reference or (config.tts.ref_audio if config else None) or 'reference.wav'
+    steps = args.steps or (config.tts.num_steps if config else None) or 4
+    voices_dir = args.voices_dir or 'voices'
+    
+    # VAD settings
+    asr_threshold = args.asr_threshold or (config.bot.asr_threshold if config else None) or 2000
+    
+    # LLM settings
+    llm_endpoint = args.llm_endpoint or (config.llm.endpoint if config else None)
+    llm_model = args.llm_model or (config.llm.model if config else None)
+    llm_api_key = args.llm_api_key or (config.llm.api_key if config else None)
+    llm_system_prompt = args.llm_system_prompt
+    personality = args.personality or (config.llm.personality if config else None)
+    
+    # If config has prompt_file, load it
+    if config and config.llm.prompt_file and not llm_system_prompt:
+        prompt_path = config.llm.prompt_file
+        if os.path.exists(prompt_path):
+            with open(prompt_path, 'r') as f:
+                llm_system_prompt = f.read()
+            print(f"[LLM] Loaded prompt from {prompt_path}")
+    
+    # Wyoming STT settings
+    wyoming_stt_host = args.wyoming_stt_host or (config.stt.wyoming_host if config else None)
+    wyoming_stt_port = args.wyoming_stt_port or (config.stt.wyoming_port if config else None) or 10300
+    
     device = args.device if args.device != 'auto' else get_best_device()
     
     bot = MumbleVoiceBot(
-        host=args.host,
-        user=args.user,
-        port=args.port,
-        password=args.password,
-        channel=args.channel,
-        reference_audio=args.reference,
+        host=host,
+        user=user,
+        port=port,
+        password=password,
+        channel=channel,
+        reference_audio=reference,
         device=device,
-        num_steps=args.steps,
-        asr_threshold=args.asr_threshold,
+        num_steps=steps,
+        asr_threshold=asr_threshold,
         debug_rms=args.debug_rms,
-        voices_dir=args.voices_dir,
-        llm_endpoint=args.llm_endpoint,
-        llm_model=args.llm_model,
-        llm_api_key=args.llm_api_key,
-        llm_system_prompt=args.llm_system_prompt,
-        personality=args.personality,
+        voices_dir=voices_dir,
+        llm_endpoint=llm_endpoint,
+        llm_model=llm_model,
+        llm_api_key=llm_api_key,
+        llm_system_prompt=llm_system_prompt,
+        personality=personality,
         config_file=args.config,
-        wyoming_stt_host=args.wyoming_stt_host,
-        wyoming_stt_port=args.wyoming_stt_port,
+        wyoming_stt_host=wyoming_stt_host,
+        wyoming_stt_port=wyoming_stt_port,
     )
     
     bot.start()
