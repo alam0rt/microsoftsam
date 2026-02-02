@@ -15,7 +15,7 @@ import asyncio
 from typing import AsyncIterator
 
 from wyoming.client import AsyncTcpClient
-from wyoming.tts import Synthesize, SynthesizeVoices
+from wyoming.tts import Synthesize
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.info import Describe, Info
 

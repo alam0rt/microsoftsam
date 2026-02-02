@@ -22,7 +22,7 @@ from typing import Optional
 import numpy as np
 
 from wyoming.server import AsyncServer, AsyncEventHandler
-from wyoming.tts import Synthesize, SynthesizeVoices
+from wyoming.tts import Synthesize
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.info import Describe, Info, TtsProgram, TtsVoice, Attribution
 from wyoming.event import Event
@@ -76,10 +76,6 @@ class LuxTTSEventHandler(AsyncEventHandler):
             await self._handle_describe()
             return True
         
-        if SynthesizeVoices.is_type(event.type):
-            await self._handle_voices()
-            return True
-        
         if Synthesize.is_type(event.type):
             synthesize = Synthesize.from_event(event)
             await self._synthesize(synthesize.text)
@@ -89,32 +85,6 @@ class LuxTTSEventHandler(AsyncEventHandler):
     
     async def _handle_describe(self) -> None:
         """Respond to describe request with server capabilities."""
-        await self.write_event(
-            Info(
-                tts=[
-                    TtsProgram(
-                        name="luxtts",
-                        description="LuxTTS voice cloning TTS",
-                        attribution=Attribution(
-                            name="LuxTTS",
-                            url="https://github.com/ysharma3501/LuxTTS",
-                        ),
-                        installed=True,
-                        voices=[
-                            TtsVoice(
-                                name="cloned",
-                                description="Voice cloned from reference audio",
-                                languages=["en"],
-                                installed=True,
-                            )
-                        ],
-                    )
-                ]
-            ).event()
-        )
-    
-    async def _handle_voices(self) -> None:
-        """Respond to voices request."""
         await self.write_event(
             Info(
                 tts=[
