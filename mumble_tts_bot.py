@@ -373,12 +373,18 @@ class MumbleVoiceBot:
         final_model = model
         final_api_key = api_key
         final_system_prompt = system_prompt
+        final_timeout = 30.0
+        final_max_tokens = None
+        final_temperature = None
         
         if config:
             final_endpoint = final_endpoint or config.llm.endpoint
             final_model = final_model or config.llm.model
             final_api_key = final_api_key or config.llm.api_key
             final_system_prompt = final_system_prompt or config.llm.system_prompt
+            final_timeout = config.llm.timeout or final_timeout
+            final_max_tokens = config.llm.max_tokens
+            final_temperature = config.llm.temperature
             if hasattr(config, 'bot') and config.bot.conversation_timeout:
                 self.conversation_timeout = config.bot.conversation_timeout
         
@@ -396,9 +402,17 @@ class MumbleVoiceBot:
             model=final_model,
             api_key=final_api_key,
             system_prompt=final_system_prompt,
-            timeout=30.0,
+            timeout=final_timeout,
+            max_tokens=final_max_tokens,
+            temperature=final_temperature,
         )
-        print(f"[LLM] Initialized: {final_model} @ {final_endpoint}")
+        extra_info = []
+        if final_max_tokens:
+            extra_info.append(f"max_tokens={final_max_tokens}")
+        if final_temperature:
+            extra_info.append(f"temp={final_temperature}")
+        extra_str = f" ({', '.join(extra_info)})" if extra_info else ""
+        print(f"[LLM] Initialized: {final_model} @ {final_endpoint}{extra_str}")
     
     def _load_system_prompt(self, prompt_file: str = None, personality: str = None) -> str:
         """Load system prompt from file, optionally combined with a personality."""
