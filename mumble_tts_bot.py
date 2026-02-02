@@ -602,6 +602,17 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         
         current_time = time.time()
         
+        # HARD LIMIT: Always check buffer size first, regardless of speech state
+        buffer_duration = self._get_buffer_duration(user_id)
+        if buffer_duration >= self.max_speech_duration:
+            if self.debug_rms:
+                print()
+            print(f"[ASR] Processing {buffer_duration:.1f}s chunk from {user_name}...")
+            audio_data = list(self.audio_buffers[user_id])
+            self.audio_buffers[user_id] = []
+            self._asr_executor.submit(self._process_speech, user.copy(), user_id, audio_data, True)
+            return  # Don't process this chunk further
+        
         # Speech detection
         if rms > self.asr_threshold:
             if not self.audio_buffers[user_id]:
@@ -609,20 +620,10 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             
             self.audio_buffers[user_id].append(sound_chunk.pcm)
             self.speech_active_until[user_id] = current_time + self.speech_hold_duration
-            
-            # Check for max duration - process chunk but keep listening
-            buffer_duration = self._get_buffer_duration(user_id)
-            if buffer_duration >= self.max_speech_duration:
-                if self.debug_rms:
-                    print()
-                print(f"[ASR] Chunk ready ({buffer_duration:.1f}s) from {user_name}, still listening...")
-                audio_data = list(self.audio_buffers[user_id])
-                self.audio_buffers[user_id] = []
-                # is_continuation=True means don't respond yet, just accumulate
-                self._asr_executor.submit(self._process_speech, user.copy(), user_id, audio_data, True)
         else:
             # Below threshold
             if current_time < self.speech_active_until[user_id]:
+                # Still in hold period, keep buffering
                 self.audio_buffers[user_id].append(sound_chunk.pcm)
             elif self.audio_buffers[user_id]:
                 # Speech ended - process and respond
@@ -631,7 +632,6 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 
                 audio_data = list(self.audio_buffers[user_id])
                 self.audio_buffers[user_id] = []
-                # is_continuation=False means respond after processing
                 self._asr_executor.submit(self._process_speech, user.copy(), user_id, audio_data, False)
     
     def _get_buffer_duration(self, user_id) -> float:
