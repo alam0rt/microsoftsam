@@ -50,6 +50,7 @@ from pymumble_py3.constants import (
 )
 
 from zipvoice.luxvoice import LuxTTS
+from huggingface_hub import snapshot_download
 
 # Import LLM components
 try:
@@ -186,29 +187,48 @@ class StreamingLuxTTS(LuxTTS):
         sentences = split_into_sentences(text)
         
         if len(sentences) <= 1:
-            wav = self.generate_speech(
-                text, encode_dict,
-                num_steps=num_steps,
-                guidance_scale=guidance_scale,
-                t_shift=t_shift,
-                speed=speed,
-                return_smooth=return_smooth
-            )
-            yield wav
+            # Pad very short text to avoid vocoder kernel size issues
+            # Vocoder kernel needs 7+ frames, requiring substantial text
+            padded_text = text + ", yes." if len(text.strip()) < 20 else text
+            try:
+                wav = self.generate_speech(
+                    padded_text, encode_dict,
+                    num_steps=num_steps,
+                    guidance_scale=guidance_scale,
+                    t_shift=t_shift,
+                    speed=speed,
+                    return_smooth=return_smooth
+                )
+                yield wav
+            except Exception as e:
+                print(f"[TTS] Error generating speech for '{text[:50]}': {e}")
+                import traceback
+                traceback.print_exc()
             return
         
         for sentence in sentences:
-            if not sentence.strip():
+            sentence = sentence.strip()
+            if not sentence:
                 continue
-            wav = self.generate_speech(
-                sentence, encode_dict,
-                num_steps=num_steps,
-                guidance_scale=guidance_scale,
-                t_shift=t_shift,
-                speed=speed,
-                return_smooth=return_smooth
-            )
-            yield wav
+            # Pad very short sentences to avoid vocoder kernel size issues
+            # The vocoder needs at least 7 frames, which requires ~20+ chars
+            if len(sentence) < 20:
+                sentence = sentence + ", yes."  # Add speakable padding
+            try:
+                wav = self.generate_speech(
+                    sentence, encode_dict,
+                    num_steps=num_steps,
+                    guidance_scale=guidance_scale,
+                    t_shift=t_shift,
+                    speed=speed,
+                    return_smooth=return_smooth
+                )
+                yield wav
+            except Exception as e:
+                print(f"[TTS] Error generating speech for sentence '{sentence[:30]}': {e}")
+                import traceback
+                traceback.print_exc()
+                # Don't yield anything on error - skip this sentence
 
 
 # =============================================================================
@@ -243,6 +263,52 @@ def get_best_device() -> str:
             return 'cpu'
     except ImportError:
         return 'cpu'
+
+
+def ensure_models_downloaded(device: str = 'cuda') -> None:
+    """
+    Pre-download all required models before starting the bot.
+    
+    This ensures models are cached locally before connecting to Mumble,
+    preventing long delays during the first voice interaction.
+    
+    Downloads:
+    - LuxTTS model (YatharthS/LuxTTS)
+    - Whisper model (openai/whisper-base for GPU, whisper-tiny for CPU)
+    """
+    from transformers import pipeline as hf_pipeline
+    
+    print("=" * 60)
+    print("[Models] Ensuring all required models are downloaded...")
+    print("=" * 60)
+    
+    # Download LuxTTS model
+    print("[Models] Checking LuxTTS model (YatharthS/LuxTTS)...")
+    try:
+        model_path = snapshot_download("YatharthS/LuxTTS")
+        print(f"[Models] ✓ LuxTTS ready at: {model_path}")
+    except Exception as e:
+        print(f"[Models] ✗ Failed to download LuxTTS: {e}")
+        raise
+    
+    # Download Whisper model (used for transcription in TTS pipeline)
+    whisper_model = "openai/whisper-base" if device != 'cpu' else "openai/whisper-tiny"
+    print(f"[Models] Checking Whisper model ({whisper_model})...")
+    try:
+        # This will download if not cached, or load from cache
+        _ = hf_pipeline(
+            "automatic-speech-recognition",
+            model=whisper_model,
+            device='cpu'  # Load on CPU just to verify download, actual device set later
+        )
+        print(f"[Models] ✓ Whisper ready: {whisper_model}")
+    except Exception as e:
+        print(f"[Models] ✗ Failed to download Whisper: {e}")
+        raise
+    
+    print("=" * 60)
+    print("[Models] All models ready!")
+    print("=" * 60)
 
 
 # =============================================================================
@@ -749,18 +815,27 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
     
     def _generate_response_sync(self, user_id: int, text: str, user_name: str = None) -> str:
         """Generate LLM response synchronously."""
+        return self._run_coro_sync(self._generate_response(user_id, text, user_name))
+
+    def _generate_oneoff_response_sync(self, prompt: str) -> str:
+        """Generate a one-off LLM response without updating history."""
+        if not self.llm:
+            return ""
+        response = self._run_coro_sync(
+            self.llm.chat([{"role": "user", "content": prompt}])
+        )
+        return response.content
+
+    def _run_coro_sync(self, coroutine):
+        """Run an async coroutine from sync code safely."""
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                import concurrent.futures
-                future = asyncio.run_coroutine_threadsafe(
-                    self._generate_response(user_id, text, user_name), loop
-                )
+                future = asyncio.run_coroutine_threadsafe(coroutine, loop)
                 return future.result(timeout=35.0)
-            else:
-                return loop.run_until_complete(self._generate_response(user_id, text, user_name))
+            return loop.run_until_complete(coroutine)
         except RuntimeError:
-            return asyncio.run(self._generate_response(user_id, text, user_name))
+            return asyncio.run(coroutine)
     
     # =========================================================================
     # Barge-in Handling
@@ -783,6 +858,10 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         """Handle incoming audio from users."""
         user_id = user['session']
         user_name = user.get('name', 'Unknown')
+
+        # Ignore our own audio to avoid feedback loops
+        if user_id == self.mumble.users.myself_session:
+            return
         
         rms = pcm_rms(sound_chunk.pcm)
         self._max_rms = max(rms, self._max_rms)
@@ -1145,7 +1224,17 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
     
     def on_message(self, message):
         """Handle text messages (for TTS)."""
-        text = strip_html(message.message)
+        # Ignore our own messages to avoid echo
+        actor = getattr(message, "actor", None)
+        if actor == self.mumble.users.myself_session:
+            return
+
+        # Ignore messages that aren't for our channel (if channel-scoped)
+        if not self._is_message_for_us(message):
+            return
+
+        raw_text = getattr(message, "message", "") or ""
+        text = strip_html(raw_text)
         if not text.strip():
             return
         
@@ -1154,9 +1243,17 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             sender = self.mumble.users[message.actor]['name']
         
         print(f"[Text] {sender}: {text}")
-        
-        # Speak text messages
-        self.speak(text)
+
+        if not self.llm:
+            print("[Text] LLM not available - ignoring text message")
+            return
+
+        try:
+            response = self._generate_response_sync(actor or 0, text, sender)
+            if response:
+                self.speak(response)
+        except Exception as e:
+            print(f"[Text] Error generating response: {e}")
     
     # =========================================================================
     # User Events - Greetings and Awareness
@@ -1216,13 +1313,17 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             time_greeting = "late night"
         
         # Create a greeting prompt
-        greeting_prompt = f"[System: {user_name} just joined the voice channel. It's {time_greeting}. Give a brief, casual greeting. One sentence max.]"
+        greeting_prompt = (
+            f"{user_name} just joined the voice channel. It's {time_greeting}. "
+            "Give a brief, casual greeting. One sentence max."
+        )
         
         # Generate via LLM (async in background)
         def generate_greeting():
             try:
-                response = self._generate_response_sync(user_id, greeting_prompt, user_name)
-                self.speak(response)
+                response = self._generate_oneoff_response_sync(greeting_prompt)
+                if response:
+                    self.speak(response)
             except Exception as e:
                 print(f"[Greet] Error generating greeting: {e}")
                 # Fallback
@@ -1236,6 +1337,23 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         
         # Run in background so we don't block
         self._asr_executor.submit(generate_greeting)
+
+    def _is_message_for_us(self, message) -> bool:
+        """Check if a text message targets our current channel."""
+        try:
+            my_channel = self.mumble.users.myself["channel_id"]
+        except Exception:
+            return True
+
+        channels = getattr(message, "channels", None)
+        if channels:
+            return my_channel in channels
+
+        trees = getattr(message, "trees", None)
+        if trees:
+            return my_channel in trees
+
+        return True
 
     # =========================================================================
     # Lifecycle
@@ -1395,7 +1513,17 @@ def main():
     # Staleness settings
     max_response_staleness = (config.bot.max_response_staleness if config else None) or 5.0
     
-    device = args.device if args.device != 'auto' else get_best_device()
+    # TTS device - allow override from config for memory-constrained GPUs
+    tts_device_config = (config.tts.device if config else None) or "auto"
+    if args.device != 'auto':
+        device = args.device
+    elif tts_device_config != 'auto':
+        device = tts_device_config
+    else:
+        device = get_best_device()
+    
+    # Ensure all models are downloaded before connecting to Mumble
+    ensure_models_downloaded(device=device)
     
     bot = MumbleVoiceBot(
         host=host,

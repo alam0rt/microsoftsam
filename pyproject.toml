@@ -95,3 +95,8 @@ addopts = "-v --cov=mumble_voice_bot --cov-report=term-missing"
 [tool.uv]
 # Use find-links for piper-phonemize which has wheels on a separate index
 find-links = ["https://k2-fsa.github.io/icefall/piper_phonemize.html"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

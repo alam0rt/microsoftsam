@@ -79,11 +79,13 @@ class TTSConfig:
         ref_duration: Seconds of reference audio to use.
         num_steps: Number of diffusion steps (quality vs speed).
         speed: Speech speed multiplier.
+        device: Compute device for TTS ('auto', 'cpu', 'cuda', 'mps').
     """
     ref_audio: str = "reference.wav"
     ref_duration: float = 5.0
     num_steps: int = 4
     speed: float = 1.0
+    device: str = "auto"
 
 
 @dataclass

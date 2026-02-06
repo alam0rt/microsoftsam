@@ -1,2 +1,3 @@
 [console_scripts]
 mumble-tts-bot = mumble_tts_bot:main
+wyoming-luxtts = mumble_voice_bot.providers.wyoming_tts_server:main
