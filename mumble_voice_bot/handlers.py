@@ -304,16 +304,20 @@ class TextCommandHandler(MumbleEventHandler):
 
     async def on_text_message(self, event: TextMessageEvent) -> None:
         """Handle incoming text message."""
+        logger.debug(f"Text message received: {event.message[:50]}... from session {event.sender_session_id}")
+        
         # Ignore our own messages
         try:
             my_session = self._bot.mumble.users.myself_session
             if event.sender_session_id == my_session:
+                logger.debug("Ignoring own message")
                 return
         except Exception:
             pass
 
         # Check if message is for our channel
         if not self._is_message_for_us(event):
+            logger.debug("Message not for our channel")
             return
 
         # Strip HTML from message
