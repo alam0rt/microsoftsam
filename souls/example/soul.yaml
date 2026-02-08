@@ -1,0 +1,46 @@
+# Example Soul Configuration
+# Copy this directory to create a new soul
+
+# Metadata
+name: "Example Soul"
+description: "A helpful voice assistant template"
+author: "Your Name"
+version: "1.0.0"
+
+# Voice settings (TTS)
+voice:
+  # Reference audio for voice cloning (relative to this soul directory)
+  # Can be a specific file or directory - if directory, uses first audio file found
+  # Supported formats: .wav, .mp3, .flac, .ogg
+  ref_audio: "audio/"
+  
+  # How many seconds of reference audio to use (max)
+  ref_duration: 5.0
+  
+  # Inference steps: lower = faster, higher = better quality
+  # Recommended: 3 (fast) or 4 (balanced)
+  num_steps: 4
+  
+  # Playback speed multiplier
+  speed: 1.0
+
+# Custom model weights (optional)
+# Leave null to use default models
+weights:
+  # Path to fine-tuned TTS model weights
+  tts_model: null
+  
+  # Path to custom voice encoder weights
+  voice_encoder: null
+
+# LLM behavior overrides (optional)
+# These override the main config when this soul is active
+llm:
+  # Response randomness (0.0 = deterministic, 1.0+ = creative)
+  temperature: 0.7
+  
+  # Maximum response length in tokens
+  max_tokens: 150
+  
+  # Optional: Override system prompt entirely
+  # system_prompt: "Custom system prompt here"

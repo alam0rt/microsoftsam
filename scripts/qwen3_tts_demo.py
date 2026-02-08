@@ -226,7 +226,7 @@ Available Speakers (CustomVoice):
             language=args.language,
         )
 
-    print(f"🎤 Qwen3-TTS Demo")
+    print("🎤 Qwen3-TTS Demo")
     print(f"   Task: {args.task}")
     print(f"   Model: {query.model_name}")
     print(f"   Text: {args.text[:50]}{'...' if len(args.text) > 50 else ''}")

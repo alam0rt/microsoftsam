@@ -68,6 +68,8 @@ dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
     "pytest-cov>=4.0",
+    "ruff>=0.4",
+    "mypy>=1.10",
 ]
 # Streaming ASR providers (for low-latency speech recognition)
 nemotron = [
@@ -94,10 +96,31 @@ package-dir = {"pymumble_py3" = "vendor/botamusique/pymumble_py3"}
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
-addopts = "-v --cov=mumble_voice_bot --cov-report=term-missing"
+addopts = "-v"
 
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.4",
+    "mypy>=1.10",
 ]
+
+[tool.ruff]
+# Exclude vendored code
+exclude = ["vendor/", "nix/"]
+line-length = 120
+
+[tool.ruff.lint]
+# E402: module level import not at top (needed for sys.path manipulation)
+# F401: unused import (some kept for re-export or type checking)
+per-file-ignores = {"mumble_tts_bot.py" = ["E402"]}
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]  # Line too long - handled by line-length setting
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+exclude = ["vendor/", "nix/"]

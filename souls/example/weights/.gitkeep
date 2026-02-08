@@ -1,0 +1,7 @@
+# Place fine-tuned model weights here (optional)
+#
+# Supported weight files:
+# - tts_model.pt      - Fine-tuned TTS model
+# - voice_encoder.pt  - Custom voice encoder
+#
+# These are optional - the bot will use default models if not provided

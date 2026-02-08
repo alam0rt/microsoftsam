@@ -115,7 +115,7 @@ Supported Languages:
     if args.no_ssl_verify:
         cmd.append("--no-ssl-verify")
 
-    print(f"🚀 Launching Qwen3-TTS Web UI")
+    print("🚀 Launching Qwen3-TTS Web UI")
     print(f"   Model: {model}")
     print(f"   Task: {args.task}")
     print(f"   URL: http{'s' if args.ssl_certfile else ''}://{args.host}:{args.port}")

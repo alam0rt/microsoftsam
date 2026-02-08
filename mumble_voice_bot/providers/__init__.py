@@ -1,5 +1,6 @@
 """LLM and voice provider implementations."""
 
+from mumble_voice_bot.providers.mumble_events import EventDispatcher
 from mumble_voice_bot.providers.openai_llm import OpenAIChatLLM
 from mumble_voice_bot.providers.wyoming_stt import WyomingSTT, WyomingSTTSync
 from mumble_voice_bot.providers.wyoming_tts import WyomingTTS, WyomingTTSSync
@@ -14,7 +15,7 @@ except ImportError:
     SherpaNemotronConfig = None
 
 try:
-    from mumble_voice_bot.providers.nemotron_stt import NemotronStreamingASR, NemotronConfig
+    from mumble_voice_bot.providers.nemotron_stt import NemotronConfig, NemotronStreamingASR
     NEMO_AVAILABLE = True
 except ImportError:
     NEMO_AVAILABLE = False
@@ -34,4 +35,6 @@ __all__ = [
     "NemotronConfig",
     "SHERPA_AVAILABLE",
     "NEMO_AVAILABLE",
+    # Event dispatcher
+    "EventDispatcher",
 ]

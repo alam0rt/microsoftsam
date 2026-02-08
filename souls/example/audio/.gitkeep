@@ -1,0 +1,10 @@
+# Drop any audio file here - it will be automatically used
+#
+# Supported formats: .wav, .mp3, .flac, .ogg
+# (First audio file found will be used)
+#
+# Guidelines:
+# - 5-15 seconds of clear speech
+# - Single speaker, minimal background noise
+# - 16kHz+ sample rate recommended
+# - Natural speaking voice with varied intonation

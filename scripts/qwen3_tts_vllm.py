@@ -166,7 +166,7 @@ Available Speakers (CustomVoice):
 
     # Build query based on task
     use_small = not args.large_model
-    
+
     if args.task == "CustomVoice":
         query = build_custom_voice_query(
             text=args.text,
@@ -195,7 +195,7 @@ Available Speakers (CustomVoice):
             use_small_model=use_small,
         )
 
-    print(f"🚀 Qwen3-TTS via vLLM-Omni")
+    print("🚀 Qwen3-TTS via vLLM-Omni")
     print(f"   Model: {query.model_name}")
     print(f"   Task: {args.task}")
     print(f"   Text: {args.text[:50]}{'...' if len(args.text) > 50 else ''}")
@@ -229,17 +229,17 @@ Available Speakers (CustomVoice):
     # Generate
     print("⏳ Generating speech...")
     import soundfile as sf
-    
+
     omni_generator = omni.generate(query.inputs, [sampling_params])
     for stage_outputs in omni_generator:
         for output in stage_outputs.request_output:
             audio_tensor = output.multimodal_output["audio"]
             audio_samplerate = output.multimodal_output["sr"].item()
-            
+
             audio_numpy = audio_tensor.float().detach().cpu().numpy()
             if audio_numpy.ndim > 1:
                 audio_numpy = audio_numpy.flatten()
-            
+
             sf.write(args.output, audio_numpy, samplerate=audio_samplerate, format="WAV")
             print(f"✅ Saved: {args.output}")
 

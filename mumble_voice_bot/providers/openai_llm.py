@@ -10,7 +10,6 @@ This provider works with any service that implements the OpenAI Chat Completions
 """
 
 import json
-import re
 from typing import AsyncIterator
 
 import httpx
@@ -20,16 +19,16 @@ from mumble_voice_bot.interfaces.llm import LLMProvider, LLMResponse
 
 class OpenAIChatLLM(LLMProvider):
     """LLM provider for OpenAI-compatible chat completion APIs.
-    
+
     This provider sends requests to any endpoint implementing the
     OpenAI Chat Completions API format:
-    
+
         POST /v1/chat/completions
         {
             "model": "...",
             "messages": [{"role": "...", "content": "..."}]
         }
-    
+
     Attributes:
         endpoint: The full URL to the chat completions endpoint.
         model: The model identifier to use.
@@ -39,7 +38,7 @@ class OpenAIChatLLM(LLMProvider):
         max_tokens: Maximum tokens in the response (optional).
         temperature: Sampling temperature (optional).
     """
-    
+
     def __init__(
         self,
         endpoint: str,
@@ -51,7 +50,7 @@ class OpenAIChatLLM(LLMProvider):
         temperature: float | None = None,
     ):
         """Initialize the OpenAI-compatible LLM provider.
-        
+
         Args:
             endpoint: Full URL to the chat completions endpoint.
                      e.g., "http://localhost:11434/v1/chat/completions" for Ollama
@@ -70,64 +69,64 @@ class OpenAIChatLLM(LLMProvider):
         self.timeout = timeout
         self.max_tokens = max_tokens
         self.temperature = temperature
-    
+
     def _build_headers(self) -> dict:
         """Build HTTP headers for the request."""
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
-    
+
     def _build_messages(self, messages: list[dict]) -> list[dict]:
         """Build the full message list including system prompt."""
         full_messages = []
-        
+
         # Prepend system prompt if configured
         if self.system_prompt:
             full_messages.append({
                 "role": "system",
                 "content": self.system_prompt
             })
-        
+
         full_messages.extend(messages)
         return full_messages
-    
+
     def _build_request_body(self, messages: list[dict]) -> dict:
         """Build the request body for the API call."""
         body = {
             "model": self.model,
             "messages": self._build_messages(messages),
         }
-        
+
         if self.max_tokens is not None:
             body["max_tokens"] = self.max_tokens
-        
+
         if self.temperature is not None:
             body["temperature"] = self.temperature
-        
+
         return body
-    
+
     async def chat(
         self,
         messages: list[dict],
         context: dict | None = None
     ) -> LLMResponse:
         """Generate a chat completion response.
-        
+
         Args:
             messages: List of message dicts with 'role' and 'content' keys.
             context: Optional context dict (currently unused, for future extensions).
-        
+
         Returns:
             LLMResponse with the generated text and metadata.
-        
+
         Raises:
             httpx.HTTPStatusError: If the API returns an error status.
             httpx.RequestError: If the request fails (network error, timeout, etc.).
         """
         headers = self._build_headers()
         body = self._build_request_body(messages)
-        
+
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 self.endpoint,
@@ -137,43 +136,43 @@ class OpenAIChatLLM(LLMProvider):
             )
             response.raise_for_status()
             data = response.json()
-        
+
         # Extract the response content
         content = data["choices"][0]["message"]["content"]
-        
+
         # Handle models that include <think>...</think> tags (e.g., Qwen3)
         # Strip out thinking content for cleaner TTS output
         if "<think>" in content and "</think>" in content:
             import re
             content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-        
+
         return LLMResponse(
             content=content,
             model=data.get("model"),
             usage=data.get("usage"),
         )
-    
+
     async def chat_stream(
         self,
         messages: list[dict],
         context: dict | None = None
     ) -> AsyncIterator[str]:
         """Stream chat completion tokens.
-        
+
         Args:
             messages: List of message dicts with 'role' and 'content' keys.
             context: Optional context dict (unused).
-            
+
         Yields:
             Text chunks as they arrive from the API.
         """
         headers = self._build_headers()
         body = self._build_request_body(messages)
         body["stream"] = True
-        
+
         # Track if we're inside a <think> block (for models like Qwen3)
         in_think_block = False
-        
+
         async with httpx.AsyncClient() as client:
             async with client.stream(
                 "POST",
@@ -183,23 +182,23 @@ class OpenAIChatLLM(LLMProvider):
                 timeout=self.timeout,
             ) as response:
                 response.raise_for_status()
-                
+
                 async for line in response.aiter_lines():
                     if not line or not line.startswith("data: "):
                         continue
-                        
+
                     data = line[6:]  # Strip "data: " prefix
                     if data == "[DONE]":
                         break
-                    
+
                     try:
                         chunk = json.loads(data)
                         delta = chunk["choices"][0].get("delta", {})
                         content = delta.get("content", "")
-                        
+
                         if not content:
                             continue
-                        
+
                         # Filter out <think>...</think> blocks for models like Qwen3
                         # Handle block start
                         if "<think>" in content:
@@ -209,7 +208,7 @@ class OpenAIChatLLM(LLMProvider):
                             if pre_think:
                                 yield pre_think
                             continue
-                        
+
                         # Handle block end
                         if "</think>" in content:
                             in_think_block = False
@@ -218,21 +217,21 @@ class OpenAIChatLLM(LLMProvider):
                             if post_think:
                                 yield post_think
                             continue
-                        
+
                         # Skip content inside think block
                         if in_think_block:
                             continue
-                        
+
                         yield content
-                        
+
                     except json.JSONDecodeError:
                         continue
-    
+
     async def is_available(self) -> bool:
         """Check if the LLM service is available.
-        
+
         Attempts a simple request to verify connectivity.
-        
+
         Returns:
             True if the service responds successfully.
         """
@@ -252,6 +251,6 @@ class OpenAIChatLLM(LLMProvider):
                 return response.status_code == 200
         except Exception:
             return False
-    
+
     def __repr__(self) -> str:
         return f"OpenAIChatLLM(endpoint={self.endpoint!r}, model={self.model!r})"

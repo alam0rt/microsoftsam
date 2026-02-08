@@ -14,23 +14,23 @@ import yaml
 
 def _expand_env_vars(value: Any) -> Any:
     """Recursively expand environment variables in config values.
-    
+
     Supports ${VAR_NAME} syntax for environment variable expansion.
-    
+
     Args:
         value: A config value (string, dict, list, or other).
-        
+
     Returns:
         The value with environment variables expanded.
     """
     if isinstance(value, str):
         # Match ${VAR_NAME} pattern
         pattern = r'\$\{([^}]+)\}'
-        
+
         def replacer(match):
             var_name = match.group(1)
             return os.environ.get(var_name, '')
-        
+
         return re.sub(pattern, replacer, value)
     elif isinstance(value, dict):
         return {k: _expand_env_vars(v) for k, v in value.items()}
@@ -43,7 +43,7 @@ def _expand_env_vars(value: Any) -> Any:
 @dataclass
 class LLMConfig:
     """Configuration for the LLM provider.
-    
+
     Attributes:
         endpoint: URL to the chat completions API endpoint.
         model: Model identifier to use.
@@ -73,7 +73,7 @@ class LLMConfig:
 @dataclass
 class TTSConfig:
     """Configuration for text-to-speech.
-    
+
     Attributes:
         ref_audio: Path to reference audio for voice cloning.
         ref_duration: Seconds of reference audio to use.
@@ -91,7 +91,7 @@ class TTSConfig:
 @dataclass
 class MumbleConfig:
     """Configuration for Mumble connection.
-    
+
     Attributes:
         host: Mumble server hostname.
         port: Mumble server port.
@@ -113,7 +113,7 @@ class MumbleConfig:
 @dataclass
 class PipelineBotConfig:
     """Configuration for bot behavior.
-    
+
     Attributes:
         wake_word: Wake word to trigger the bot (None = respond to all speech).
         silence_threshold_ms: Milliseconds of silence before processing speech.
@@ -136,7 +136,7 @@ class PipelineBotConfig:
 @dataclass
 class STTConfig:
     """Configuration for speech-to-text.
-    
+
     Attributes:
         provider: STT provider to use. Options:
                   - "local" (default): Use local Whisper via LuxTTS
@@ -155,18 +155,18 @@ class STTConfig:
         nemotron_device: Device for NeMo Nemotron ("cuda" or "cpu").
     """
     provider: str = "local"  # local, wyoming, sherpa_nemotron, nemotron_nemo
-    
+
     # Wyoming settings
     wyoming_host: str | None = None
     wyoming_port: int = 10300
-    
+
     # Sherpa-onnx Nemotron settings
     sherpa_encoder: str | None = None
     sherpa_decoder: str | None = None
     sherpa_joiner: str | None = None
     sherpa_tokens: str | None = None
     sherpa_provider: str = "cuda"
-    
+
     # NeMo Nemotron settings
     nemotron_model: str = "nvidia/nemotron-speech-streaming-en-0.6b"
     nemotron_chunk_ms: int = 160
@@ -176,10 +176,10 @@ class STTConfig:
 @dataclass
 class ModelsConfig:
     """Configuration for model storage and caching.
-    
+
     Controls where HuggingFace models and other ML models are stored/cached.
     These settings are applied as environment variables before loading models.
-    
+
     Attributes:
         hf_home: HuggingFace home directory (sets HF_HOME).
                  This is the root for all HF-related files including cache.
@@ -197,45 +197,45 @@ class ModelsConfig:
     transformers_cache: str | None = None
     torch_home: str | None = None
     xdg_cache_home: str | None = None
-    
+
     def apply_environment(self) -> dict[str, str]:
         """Apply model paths as environment variables.
-        
+
         Call this before loading any HuggingFace or PyTorch models.
-        
+
         Returns:
             Dict of environment variables that were set.
         """
         applied = {}
-        
+
         if self.hf_home:
             os.environ["HF_HOME"] = self.hf_home
             applied["HF_HOME"] = self.hf_home
-        
+
         if self.hf_hub_cache:
             os.environ["HF_HUB_CACHE"] = self.hf_hub_cache
             os.environ["HUGGINGFACE_HUB_CACHE"] = self.hf_hub_cache  # Legacy alias
             applied["HF_HUB_CACHE"] = self.hf_hub_cache
-        
+
         if self.transformers_cache:
             os.environ["TRANSFORMERS_CACHE"] = self.transformers_cache
             applied["TRANSFORMERS_CACHE"] = self.transformers_cache
-        
+
         if self.torch_home:
             os.environ["TORCH_HOME"] = self.torch_home
             applied["TORCH_HOME"] = self.torch_home
-        
+
         if self.xdg_cache_home:
             os.environ["XDG_CACHE_HOME"] = self.xdg_cache_home
             applied["XDG_CACHE_HOME"] = self.xdg_cache_home
-        
+
         return applied
 
 
 @dataclass
 class BotConfig:
     """Complete bot configuration.
-    
+
     Attributes:
         llm: LLM provider configuration.
         tts: Text-to-speech configuration.
@@ -254,16 +254,16 @@ class BotConfig:
 
 def load_config(path: str | Path | None = None) -> BotConfig:
     """Load configuration from a YAML file.
-    
+
     If no path is provided, looks for config.yaml in the current directory.
     Environment variables in the format ${VAR_NAME} are expanded.
-    
+
     Args:
         path: Path to the YAML config file.
-        
+
     Returns:
         BotConfig with loaded settings.
-        
+
     Raises:
         FileNotFoundError: If the config file doesn't exist.
         yaml.YAMLError: If the config file is invalid YAML.
@@ -272,17 +272,17 @@ def load_config(path: str | Path | None = None) -> BotConfig:
         path = Path("config.yaml")
     else:
         path = Path(path)
-    
+
     if not path.exists():
         # Return default config if no file exists
         return BotConfig()
-    
+
     with open(path) as f:
         raw_config = yaml.safe_load(f) or {}
-    
+
     # Expand environment variables
     config_data = _expand_env_vars(raw_config)
-    
+
     # Build config objects
     llm_data = config_data.get("llm", {})
     tts_data = config_data.get("tts", {})
@@ -290,7 +290,7 @@ def load_config(path: str | Path | None = None) -> BotConfig:
     mumble_data = config_data.get("mumble", {})
     bot_data = config_data.get("bot", {})
     models_data = config_data.get("models", {})
-    
+
     return BotConfig(
         llm=LLMConfig(**{k: v for k, v in llm_data.items() if v is not None}),
         tts=TTSConfig(**{k: v for k, v in tts_data.items() if v is not None}),
@@ -303,7 +303,7 @@ def load_config(path: str | Path | None = None) -> BotConfig:
 
 def create_example_config(path: str | Path = "config.yaml") -> None:
     """Create an example configuration file.
-    
+
     Args:
         path: Path where to write the example config.
     """
@@ -316,20 +316,20 @@ llm:
   endpoint: "http://localhost:11434/v1/chat/completions"
   model: "llama3.2:3b"
   api_key: "${LLM_API_KEY}"  # Optional, set via environment
-  
+
   # Prompt configuration (choose one):
   # Option 1: Inline system prompt
   system_prompt: |
     You are a helpful voice assistant in a Mumble voice chat.
     Keep responses concise and conversational (1-3 sentences).
     Be friendly but not overly verbose - this is voice, not text.
-  
+
   # Option 2: Load prompt from file (overrides system_prompt)
   # prompt_file: "prompts/default.md"
-  
+
   # Option 3: Add a personality on top of the prompt
   # personality: "imperial"  # Loads personalities/imperial.md
-  
+
   timeout: 30.0
   # max_tokens: 256  # Optional, limit response length
   # temperature: 0.7  # Optional, control randomness
@@ -370,8 +370,8 @@ models:
   # torch_home: "/path/to/torch"          # TORCH_HOME - PyTorch models
   # xdg_cache_home: "/path/to/cache"      # XDG_CACHE_HOME - fallback cache
 """
-    
+
     with open(path, "w") as f:
         f.write(example)
-    
+
     print(f"Created example config at {path}")
