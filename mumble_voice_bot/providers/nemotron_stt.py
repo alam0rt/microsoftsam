@@ -221,8 +221,16 @@ class NemotronStreamingASR(STTProvider):
                 
                 try:
                     # Transcribe the temp file
+                    # NeMo returns list of transcriptions (strings or Hypothesis objects)
                     result = self.model.transcribe([temp_path])
-                    return result[0] if result else ""
+                    if not result:
+                        return ""
+                    text = result[0]
+                    # Handle Hypothesis objects (have .text attribute)
+                    if hasattr(text, 'text'):
+                        text = text.text
+                    # Ensure we return a string
+                    return str(text) if text else ""
                 finally:
                     # Clean up temp file
                     if os.path.exists(temp_path):
