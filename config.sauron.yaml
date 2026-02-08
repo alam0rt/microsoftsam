@@ -1,7 +1,7 @@
 # Sauron Configuration for Mumble Voice Bot
 
-# Use the Raf soul (Magic: The Gathering enthusiast)
-soul: "raf"
+# Use the Imperial Guard soul (Warhammer 40K)
+soul: "imperial-guard"
 
 llm:
   endpoint: "https://openrouter.ai/api/v1/chat/completions"
@@ -18,7 +18,7 @@ tts:
 mumble:
   host: "murmur.middleearth.samlockart.com"
   port: 64738
-  user: "Raf"
+  user: "Imperial Guard"
 
 stt:
   provider: "nemotron_nemo"
