@@ -761,7 +761,9 @@ class MumbleVoiceBot:
             final_endpoint = final_endpoint or config.llm.endpoint
             final_model = final_model or config.llm.model
             final_api_key = final_api_key or config.llm.api_key
-            final_system_prompt = final_system_prompt or config.llm.system_prompt
+            # Don't use config system_prompt if personality is set (we'll load prompts/default.md + personality)
+            if not personality:
+                final_system_prompt = final_system_prompt or config.llm.system_prompt
             final_timeout = config.llm.timeout or final_timeout
             final_max_tokens = config.llm.max_tokens
             final_temperature = config.llm.temperature
@@ -775,6 +777,7 @@ class MumbleVoiceBot:
         # Defaults
         final_endpoint = final_endpoint or "http://localhost:11434/v1/chat/completions"
         final_model = final_model or "llama3.2:3b"
+        # Always load system prompt with personality if personality is set
         final_system_prompt = final_system_prompt or self._load_system_prompt(personality=personality)
 
         self.llm = OpenAIChatLLM(
