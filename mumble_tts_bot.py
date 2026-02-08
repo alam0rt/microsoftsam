@@ -1011,6 +1011,17 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         if user_id == self.mumble.users.myself_session:
             return
 
+        # CRITICAL: Ignore all audio while bot is speaking to prevent feedback
+        # When bot speaks, users' microphones pick up the audio and send it back
+        # This causes the bot to transcribe its own TTS output as user speech
+        if self._speaking.is_set():
+            # Still allow barge-in detection for high RMS
+            rms = pcm_rms(sound_chunk.pcm)
+            if self.turn_controller and rms > self.asr_threshold * 1.5:  # Higher threshold for barge-in
+                if self.turn_controller.request_barge_in():
+                    print(f"\n[Barge-in] User {user_name} interrupted bot")
+            return  # Don't buffer audio while speaking
+
         rms = pcm_rms(sound_chunk.pcm)
         self._max_rms = max(rms, self._max_rms)
 
@@ -1020,11 +1031,6 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             threshold_pos = min(self.asr_threshold // 100, 50)
             bar = '-' * threshold_pos + '+' * max(0, bar_width - threshold_pos) if rms >= self.asr_threshold else '-' * bar_width
             print(f'\r[{user_name:12}] RMS: {rms:5d} / {self._max_rms:5d}  |{bar:<50}|', end='', flush=True)
-
-        # Barge-in detection: if user speaks while bot is speaking
-        if self.turn_controller and self._speaking.is_set() and rms > self.asr_threshold:
-            if self.turn_controller.request_barge_in():
-                print(f"\n[Barge-in] User {user_name} interrupted bot")
 
         # Initialize state for new users
         if user_id not in self.audio_buffers:
@@ -1305,6 +1311,17 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         if not text:
             return
         self._speaking.set()
+
+        # Clear all audio buffers and pending text when starting to speak
+        # This prevents processing stale audio that was buffered before we started speaking
+        # and also prevents feedback loops from microphones picking up our TTS output
+        for user_id in list(self.audio_buffers.keys()):
+            self.audio_buffers[user_id] = []
+            self.speech_active_until[user_id] = 0
+        # Clear pending text to avoid responding to feedback from our own TTS
+        self.pending_text.clear()
+        self.pending_text_time.clear()
+
         tts_start = time.time()
 
         # Mark TTS start in tracker
@@ -1362,6 +1379,17 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 pipeline_total = time.time() - pipeline_start
                 logger.info(f"TTS complete: {tts_total*1000:.0f}ms synthesis, {audio_duration_ms:.0f}ms audio, pipeline total: {pipeline_total*1000:.0f}ms")
         finally:
+            # Small delay after speaking before accepting audio
+            # This prevents picking up the tail-end of our TTS output
+            time.sleep(0.3)
+
+            # Clear any audio that accumulated during TTS playback
+            for user_id in list(self.audio_buffers.keys()):
+                self.audio_buffers[user_id] = []
+                self.speech_active_until[user_id] = 0
+            self.pending_text.clear()
+            self.pending_text_time.clear()
+
             self._speaking.clear()
             # Reset turn controller to idle
             if self.turn_controller:
