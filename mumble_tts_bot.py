@@ -551,7 +551,12 @@ class MumbleVoiceBot:
                     device=nemotron_device,
                 )
                 self.streaming_stt = NemotronStreamingASR(config)
-                # Note: NeMo model loads lazily on first use
+                # Pre-initialize Nemotron model so it's ready when we join Mumble
+                print("[STT] Pre-loading Nemotron model (this may take a moment)...")
+                if not asyncio.run(self.streaming_stt.initialize()):
+                    print("[Warning] Failed to pre-initialize Nemotron, will try again on first use")
+                else:
+                    print("[STT] Nemotron model ready!")
             else:
                 print("[Warning] NeMo Nemotron requested but nemo_toolkit not installed")
                 print("[STT] Falling back to local Whisper")
