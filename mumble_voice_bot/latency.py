@@ -137,15 +137,17 @@ class TurnLatency:
 
 
 class LatencyLogger:
-    """Append latency records to a JSONL file."""
+    """Log latency records (in-memory only by default)."""
 
-    def __init__(self, path: Path = Path("latency.jsonl")):
-        self.path = path
+    def __init__(self, path: Path = None, write_to_disk: bool = False):
+        self.path = path or Path("latency.jsonl")
+        self.write_to_disk = write_to_disk
 
     def log(self, turn: TurnLatency):
-        """Append a turn's latency to the log file."""
-        with open(self.path, "a") as f:
-            f.write(turn.to_json_line() + "\n")
+        """Log a turn's latency (optionally to disk)."""
+        if self.write_to_disk:
+            with open(self.path, "a") as f:
+                f.write(turn.to_json_line() + "\n")
         turn.log()
 
 

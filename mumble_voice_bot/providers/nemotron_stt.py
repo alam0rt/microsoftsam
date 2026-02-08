@@ -212,15 +212,10 @@ class NemotronStreamingASR(STTProvider):
 
         def do_transcribe():
             with torch.no_grad():
-                # Create a temporary file for the audio
-                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
-                    temp_path = f.name
-                    sf.write(temp_path, audio_float, sample_rate)
-
                 try:
-                    # Transcribe the temp file
-                    # NeMo returns list of transcriptions (strings or Hypothesis objects)
-                    result = self.model.transcribe([temp_path])
+                    # Try to transcribe numpy array directly (NeMo 2.0+)
+                    # This avoids slow disk I/O from temp file creation
+                    result = self.model.transcribe([audio_float])
                     if not result:
                         return ""
 
@@ -236,10 +231,27 @@ class NemotronStreamingASR(STTProvider):
 
                     # Ensure we return a string
                     return str(text).strip() if text else ""
-                finally:
-                    # Clean up temp file
-                    if os.path.exists(temp_path):
-                        os.unlink(temp_path)
+                except Exception as e:
+                    # Fallback to temp file if numpy transcription fails
+                    logger.warning(f"Direct numpy transcription failed, using temp file: {e}")
+                    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+                        temp_path = f.name
+                        sf.write(temp_path, audio_float, sample_rate)
+
+                    try:
+                        result = self.model.transcribe([temp_path])
+                        if not result:
+                            return ""
+
+                        text = result[0]
+                        while isinstance(text, list) and len(text) > 0:
+                            text = text[0]
+                        if hasattr(text, 'text'):
+                            text = text.text
+                        return str(text).strip() if text else ""
+                    finally:
+                        if os.path.exists(temp_path):
+                            os.unlink(temp_path)
 
         return await loop.run_in_executor(None, do_transcribe)
 

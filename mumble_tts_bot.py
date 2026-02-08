@@ -485,15 +485,31 @@ class MumbleVoiceBot:
 
         # Latency tracking and turn control
         if LATENCY_TRACKING_AVAILABLE:
-            self.latency_logger = LatencyLogger()
+            self.latency_logger = LatencyLogger()  # In-memory only
             self.turn_controller = TurnController()
-            print("[Latency] Tracking enabled - logging to latency.jsonl")
+            print("[Latency] Tracking enabled (in-memory)")
         else:
             self.latency_logger = None
             self.turn_controller = None
 
         # Current latency tracker for in-progress turn
         self._current_tracker: LatencyTracker = None
+
+        # Stats tracking
+        self._stats_interval = 30  # Log stats every 30 seconds
+        self._asr_count = 0
+        self._asr_total_ms = 0
+        self._llm_count = 0
+        self._llm_total_ms = 0
+        self._tts_count = 0
+        self._tts_total_ms = 0
+        self._stats_lock = threading.Lock()
+
+        # Start stats logger thread
+        self._stats_thread = threading.Thread(
+            target=self._stats_logger, daemon=True, name="Stats-Logger"
+        )
+        self._stats_thread.start()
 
         # Start TTS worker
         self._tts_worker_thread = threading.Thread(
@@ -1170,6 +1186,9 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
             transcribe_time = time.time() - start_time
 
+            # Record ASR stats
+            self._record_asr_stat(transcribe_time * 1000)
+
             # Mark ASR complete in tracker
             if tracker:
                 tracker.asr_final(text)
@@ -1225,6 +1244,9 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 try:
                     response = self._generate_response_sync(user_id, text, user_name)
                     llm_time = time.time() - llm_start
+
+                    # Record LLM stats
+                    self._record_llm_stat(llm_time * 1000)
 
                     # Mark LLM complete in tracker
                     if tracker:
@@ -1366,6 +1388,9 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
             tts_total = time.time() - tts_start
 
+            # Record TTS stats
+            self._record_tts_stat(tts_total * 1000)
+
             # Calculate audio duration (24kHz sample rate for LuxTTS output)
             audio_duration_ms = (total_audio_samples / 24000) * 1000
 
@@ -1394,6 +1419,54 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             # Reset turn controller to idle
             if self.turn_controller:
                 self.turn_controller.reset()
+
+    def _stats_logger(self):
+        """Background thread that logs stats periodically."""
+        logger.info(f"Stats logger started (interval: {self._stats_interval}s)")
+        while not self._shutdown.is_set():
+            time.sleep(self._stats_interval)
+            if self._shutdown.is_set():
+                break
+            
+            with self._stats_lock:
+                asr_count = self._asr_count
+                asr_avg = self._asr_total_ms / asr_count if asr_count > 0 else 0
+                llm_count = self._llm_count
+                llm_avg = self._llm_total_ms / llm_count if llm_count > 0 else 0
+                tts_count = self._tts_count
+                tts_avg = self._tts_total_ms / tts_count if tts_count > 0 else 0
+            
+            tts_queue_size = self._tts_queue.qsize()
+            audio_buffers = len(self.audio_buffers)
+            pending_text = len(self.pending_text)
+            speaking = self._speaking.is_set()
+            
+            logger.info(
+                f"[Stats] ASR: {asr_count} ({asr_avg:.0f}ms avg) | "
+                f"LLM: {llm_count} ({llm_avg:.0f}ms avg) | "
+                f"TTS: {tts_count} ({tts_avg:.0f}ms avg) | "
+                f"Queues: TTS={tts_queue_size}, AudioBuf={audio_buffers}, Pending={pending_text} | "
+                f"Speaking: {speaking}"
+            )
+        logger.info("Stats logger stopped")
+
+    def _record_asr_stat(self, duration_ms: float):
+        """Record ASR processing time for stats."""
+        with self._stats_lock:
+            self._asr_count += 1
+            self._asr_total_ms += duration_ms
+
+    def _record_llm_stat(self, duration_ms: float):
+        """Record LLM processing time for stats."""
+        with self._stats_lock:
+            self._llm_count += 1
+            self._llm_total_ms += duration_ms
+
+    def _record_tts_stat(self, duration_ms: float):
+        """Record TTS processing time for stats."""
+        with self._stats_lock:
+            self._tts_count += 1
+            self._tts_total_ms += duration_ms
 
     def speak(self, text: str, blocking: bool = False):
         """Queue text to be spoken."""
