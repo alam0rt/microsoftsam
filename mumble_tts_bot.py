@@ -241,7 +241,8 @@ class StreamingLuxTTS(LuxTTS):
                 yield wav
             return
 
-        for sentence in sentences:
+        for i, sentence in enumerate(sentences):
+            print(f"[TTS-STREAM] Processing sentence {i+1}/{len(sentences)}: '{sentence[:30]}...'")
             sentence = sentence.strip()
             if not sentence:
                 continue
@@ -249,6 +250,7 @@ class StreamingLuxTTS(LuxTTS):
             # The vocoder needs at least 7 frames, which requires ~20+ chars
             sentence = _pad_tts_text(sentence)
             if not sentence:
+                print(f"[TTS-STREAM] Sentence {i+1} empty after padding, skipping")
                 continue
             wav = self._generate_speech_safe(
                 sentence,
@@ -260,7 +262,11 @@ class StreamingLuxTTS(LuxTTS):
                 return_smooth=return_smooth,
             )
             if wav is not None:
+                print(f"[TTS-STREAM] Yielding sentence {i+1}")
                 yield wav
+                print(f"[TTS-STREAM] Returned from yield for sentence {i+1}")
+            else:
+                print(f"[TTS-STREAM] Sentence {i+1} wav was None")
 
     def _generate_speech_safe(
         self,
@@ -1370,10 +1376,14 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
             first_chunk = True
             total_audio_samples = 0
+            chunk_count = 0
 
             for wav_chunk in self.tts.generate_speech_streaming(
                 text, voice_prompt, num_steps=self.num_steps
             ):
+                chunk_count += 1
+                print(f"[TTS-LOOP] Received chunk {chunk_count}")
+                
                 # Check for barge-in cancellation
                 if self.turn_controller and self.turn_controller.is_cancelled():
                     logger.info("TTS cancelled due to barge-in")
@@ -1396,7 +1406,9 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 wav_float = np.clip(wav_float, -1.0, 1.0)
                 pcm = (wav_float * 32767).astype(np.int16)
                 total_audio_samples += len(pcm)
+                print(f"[TTS-LOOP] Chunk {chunk_count}: {len(pcm)} samples, calling add_sound...")
                 self.mumble.sound_output.add_sound(pcm.tobytes())
+                print(f"[TTS-LOOP] Chunk {chunk_count}: add_sound completed")
 
             tts_total = time.time() - tts_start
 
