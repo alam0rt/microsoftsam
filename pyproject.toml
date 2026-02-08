@@ -1,5 +1,5 @@
 [tool.uv]
-cache-dir = ".cache"
+cache-dir = ".uv-cache"
 # Use find-links for piper-phonemize which has wheels on a separate index
 find-links = ["https://k2-fsa.github.io/icefall/piper_phonemize.html"]
 

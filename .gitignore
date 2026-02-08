@@ -4,8 +4,11 @@
 .venv-*
 __pycache__
 
-# Model cache (local HuggingFace/PyTorch cache)
-.cache/
+# uv package cache
+.uv-cache/
+
+# Model cache (HuggingFace/PyTorch)
+.hf-cache/
 models/
 *.onnx
 *.safetensors
