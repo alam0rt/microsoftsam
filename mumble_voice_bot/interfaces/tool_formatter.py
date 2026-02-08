@@ -150,7 +150,19 @@ class LFM25ToolFormatter(ToolFormatter):
                 })
         
         tool_json = json.dumps(lfm_tools, indent=2)
-        prompt_addition = f"\n\nList of tools: {tool_json}"
+        
+        # Add explicit instructions for tool use per LFM2.5 format
+        prompt_addition = f"""
+
+List of tools: {tool_json}
+
+When you need to use a tool, output your tool call in this exact format:
+<|tool_call_start|>[function_name(param="value")]<|tool_call_end|>
+
+For example, to switch personality: <|tool_call_start|>[souls(action="switch", soul_name="raf")]<|tool_call_end|>
+For example, to search the web: <|tool_call_start|>[web_search(query="latest news")]<|tool_call_end|>
+
+Always use the tool when the user asks to switch personality/soul or search for information."""
         
         return FormattedTools(system_prompt_addition=prompt_addition)
     
