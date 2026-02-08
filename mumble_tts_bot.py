@@ -617,12 +617,17 @@ class MumbleVoiceBot:
 
     def _init_event_system(self):
         """Initialize the event dispatcher and handlers."""
-        # Create event loop for async handlers
-        try:
-            self._event_loop = asyncio.get_event_loop()
-        except RuntimeError:
-            self._event_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self._event_loop)
+        # Create a NEW event loop for async handlers (don't use the main thread's loop)
+        self._event_loop = asyncio.new_event_loop()
+
+        # Start the event loop in a background thread so async handlers can run
+        self._event_loop_thread = threading.Thread(
+            target=self._run_event_loop,
+            daemon=True,
+            name="EventLoop"
+        )
+        self._event_loop_thread.start()
+        logger.info("Event loop started in background thread")
 
         # Create dispatcher (don't enable sound events - we handle those directly)
         self.event_dispatcher = EventDispatcher(
@@ -643,6 +648,13 @@ class MumbleVoiceBot:
         # Start the dispatcher
         self.event_dispatcher.start()
         print("[Events] Event system initialized with handlers: Presence, TextCommand, Connection")
+
+    def _run_event_loop(self):
+        """Run the async event loop in a background thread."""
+        asyncio.set_event_loop(self._event_loop)
+        logger.debug("Event loop thread running")
+        self._event_loop.run_forever()
+        logger.debug("Event loop thread stopped")
 
     def _init_legacy_callbacks(self):
         """Initialize legacy callbacks when event system is unavailable."""
@@ -1540,6 +1552,9 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             self._shutdown.set()
             self._tts_queue.join()
             self._asr_executor.shutdown(wait=True)
+            # Stop the event loop
+            if hasattr(self, '_event_loop') and self._event_loop.is_running():
+                self._event_loop.call_soon_threadsafe(self._event_loop.stop)
 
 
 def main():
