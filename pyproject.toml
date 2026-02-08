@@ -61,6 +61,8 @@ dependencies = [
     "pyyaml>=6.0",
     # Wyoming protocol
     "wyoming>=1.5.0",
+    # Nemotron ASR
+    "nemo_toolkit[asr]>=2.0.0",
 ]
 
 [project.optional-dependencies]
