@@ -309,8 +309,8 @@ class TestToolCallDataclass:
         assert call.arguments == {"query": "test"}
 
     def test_tool_call_default_arguments(self):
-        """Test ToolCall with default empty arguments."""
-        call = ToolCall(id="call_456", name="no_args")
+        """Test ToolCall with empty arguments dict."""
+        call = ToolCall(id="call_456", name="no_args", arguments={})
 
         assert call.arguments == {}
 

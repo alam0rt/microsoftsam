@@ -3,6 +3,7 @@
 .venv
 .venv-*
 __pycache__
+.coverage
 
 # uv package cache
 .uv-cache/

@@ -1213,6 +1213,10 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
         # Get tool definitions if tools are available
         tools = self.tools.get_definitions() if self.tools else None
+        if tools:
+            logger.debug(f"Tools available: {[t.get('function', {}).get('name', '?') for t in tools]}")
+        else:
+            logger.debug("No tools available for LLM request")
 
         # Tool execution loop
         max_iterations = 5

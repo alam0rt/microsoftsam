@@ -118,6 +118,7 @@ class OpenAIChatLLM(LLMProvider):
             formatted = self._tool_formatter.format_tools(tools)
             if formatted.system_prompt_addition:
                 system_content = system_content + formatted.system_prompt_addition
+                logger.debug(f"Added {len(tools)} tool(s) to system prompt for text-based formatter")
 
         # Prepend system prompt if we have any content
         if system_content:
@@ -125,6 +126,7 @@ class OpenAIChatLLM(LLMProvider):
                 "role": "system",
                 "content": system_content
             })
+            logger.debug(f"System prompt length: {len(system_content)} chars")
 
         full_messages.extend(messages)
         return full_messages
@@ -186,7 +188,8 @@ class OpenAIChatLLM(LLMProvider):
         # Log the request
         user_message = messages[-1].get("content", "") if messages else ""
         logger.info(f'LLM request: "{user_message[:100]}..."' if len(user_message) > 100 else f'LLM request: "{user_message}"')
-        logger.debug(f"LLM full request: model={self.model}, messages={len(body['messages'])}, tools={len(tools) if tools else 0}")
+        if tools:
+            logger.info(f"LLM request includes {len(tools)} tool(s): {[t.get('function', {}).get('name', '?') for t in tools]}")
 
         start_time = time.time()
 

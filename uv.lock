@@ -1708,7 +1708,9 @@ dev = [
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
     { name = "ruff" },
+    { name = "vulture" },
 ]
 
 [package.metadata]
@@ -1758,7 +1760,9 @@ dev = [
     { name = "mypy", specifier = ">=1.10" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "ruff", specifier = ">=0.4" },
+    { name = "vulture", specifier = ">=2.14" },
 ]
 
 [[package]]
@@ -3575,6 +3579,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/db/48/1e4d3a4a97292e47ebaa18e3eae6ecb2f57bde47693ccab0e7acb23f9ffe/vocos-0.1.0.tar.gz", hash = "sha256:b488224dbe398ff7d4790a027ad659478b4bc02e465db992c62c12b32ca043d8", size = 21107, upload-time = "2023-10-14T00:57:29.631Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0a/45/82fe9b5696eb5dd4f84632f75b549b48bed0c33a5920b6309fbafd7e3477/vocos-0.1.0-py3-none-any.whl", hash = "sha256:0ac13eaef68596074301e912d781399b3defa4b4ca60b6bc52c8a4b9209ca235", size = 24085, upload-time = "2023-10-14T00:57:27.972Z" },
+]
+
+[[package]]
+name = "vulture"
+version = "2.14"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/8e/25/925f35db758a0f9199113aaf61d703de891676b082bd7cf73ea01d6000f7/vulture-2.14.tar.gz", hash = "sha256:cb8277902a1138deeab796ec5bef7076a6e0248ca3607a3f3dee0b6d9e9b8415", size = 58823, upload-time = "2024-12-08T17:39:43.319Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a0/56/0cc15b8ff2613c1d5c3dc1f3f576ede1c43868c1bc2e5ccaa2d4bcd7974d/vulture-2.14-py2.py3-none-any.whl", hash = "sha256:d9a90dba89607489548a49d557f8bac8112bd25d3cbc8aeef23e860811bd5ed9", size = 28915, upload-time = "2024-12-08T17:39:40.573Z" },
 ]
 
 [[package]]
