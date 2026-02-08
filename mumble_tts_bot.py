@@ -162,7 +162,7 @@ def _pad_tts_text(text: str, min_chars: int = 20, min_words: int = 4) -> str:
     Uses ellipses as padding - these generate natural pauses without producing
     transcribable words that would cause feedback loops.
     
-    Only minimal padding is applied (20 chars / 4 words) to prevent vocoder crashes
+    Only minimal padding is applied (20 chars) to prevent vocoder crashes
     while keeping audio duration reasonable.
     """
     cleaned = " ".join(text.split())
@@ -170,7 +170,8 @@ def _pad_tts_text(text: str, min_chars: int = 20, min_words: int = 4) -> str:
         return ""
 
     # Only pad if very short - add trailing ellipses for natural pause
-    while len(cleaned) < min_chars or len(cleaned.split()) < min_words:
+    # Note: only check char count, not word count (ellipses don't add words!)
+    while len(cleaned) < min_chars:
         cleaned = f"{cleaned}..."
 
     return cleaned
