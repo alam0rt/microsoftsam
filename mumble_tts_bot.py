@@ -210,18 +210,24 @@ class StreamingLuxTTS(LuxTTS):
         return_smooth: bool = False
     ) -> Generator[torch.Tensor, None, None]:
         """Stream speech generation by splitting text into sentences."""
+        print(f"[TTS-STREAM] Starting generate_speech_streaming for: '{text[:50]}...'")
         text = _pad_tts_text(text)
         if not text:
+            print("[TTS-STREAM] Text empty after padding, returning")
             return
 
+        print(f"[TTS-STREAM] Splitting into sentences...")
         sentences = split_into_sentences(text)
+        print(f"[TTS-STREAM] Got {len(sentences)} sentences")
 
         if len(sentences) <= 1:
             # Pad very short text to avoid vocoder kernel size issues
             # Vocoder kernel needs 7+ frames, requiring substantial text
             padded_text = _pad_tts_text(text)
             if not padded_text:
+                print("[TTS-STREAM] Padded text empty, returning")
                 return
+            print(f"[TTS-STREAM] Single sentence, calling _generate_speech_safe...")
             wav = self._generate_speech_safe(
                 padded_text,
                 encode_dict,
