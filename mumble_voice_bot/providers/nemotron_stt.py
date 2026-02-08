@@ -9,6 +9,8 @@ Time-to-first-token: ~24ms (80ms chunk)
 
 import asyncio
 import logging
+import tempfile
+import os
 from dataclasses import dataclass
 from typing import AsyncIterator
 
@@ -23,11 +25,13 @@ logger = logging.getLogger(__name__)
 try:
     import nemo.collections.asr as nemo_asr
     import torch
+    import soundfile as sf
     NEMO_AVAILABLE = True
 except ImportError:
     NEMO_AVAILABLE = False
     torch = None
     nemo_asr = None
+    sf = None
 
 
 @dataclass
@@ -80,6 +84,7 @@ class NemotronStreamingASR(STTProvider):
         self.model = None
         self.stabilizer = TranscriptStabilizer()
         self._initialized = False
+        self._init_lock = asyncio.Lock()
 
     async def initialize(self) -> bool:
         """Load the model (do this once at startup).
@@ -87,36 +92,37 @@ class NemotronStreamingASR(STTProvider):
         Returns:
             True if initialization succeeded.
         """
-        if not NEMO_AVAILABLE:
-            logger.error("NeMo not available. Install with: pip install nemo_toolkit[asr]")
-            return False
+        # Use lock to prevent concurrent initialization attempts
+        async with self._init_lock:
+            if self._initialized:
+                return True
 
-        try:
-            logger.info(f"Loading Nemotron model: {self.config.model_name}")
+            if not NEMO_AVAILABLE:
+                logger.error("NeMo not available. Install with: pip install nemo_toolkit[asr]")
+                return False
 
-            # Load model in executor to avoid blocking
-            loop = asyncio.get_event_loop()
-            self.model = await loop.run_in_executor(
-                None,
-                lambda: nemo_asr.models.ASRModel.from_pretrained(
-                    self.config.model_name
-                ).to(self.config.device)
-            )
-            self.model.eval()
+            try:
+                logger.info(f"Loading Nemotron model: {self.config.model_name}")
 
-            # Configure chunk size for streaming
-            chunk_samples = int(self.config.chunk_size_ms * 16)  # 16kHz sample rate
-            self.model.change_decoding_strategy(
-                decoding_cfg={"strategy": "greedy", "chunk_size": chunk_samples}
-            )
+                # Load model in executor to avoid blocking
+                loop = asyncio.get_event_loop()
+                self.model = await loop.run_in_executor(
+                    None,
+                    lambda: nemo_asr.models.ASRModel.from_pretrained(
+                        self.config.model_name
+                    ).to(self.config.device)
+                )
+                self.model.eval()
 
-            self._initialized = True
-            logger.info(f"Nemotron initialized (chunk_size={self.config.chunk_size_ms}ms)")
-            return True
+                self._initialized = True
+                logger.info(f"Nemotron initialized (chunk_size={self.config.chunk_size_ms}ms)")
+                return True
 
-        except Exception as e:
-            logger.error(f"Failed to initialize Nemotron: {e}")
-            return False
+            except Exception as e:
+                logger.error(f"Failed to initialize Nemotron: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                return False
 
     async def transcribe_streaming(
         self,
@@ -124,6 +130,10 @@ class NemotronStreamingASR(STTProvider):
         sample_rate: int = 16000,
     ) -> AsyncIterator[tuple[str, bool]]:
         """Transcribe audio stream, yielding partial results.
+
+        Note: This implementation collects audio and transcribes in chunks
+        since the NeMo streaming API requires special handling.
+        For true low-latency streaming, consider using sherpa_nemotron.py.
 
         Args:
             audio_stream: Async iterator yielding PCM audio bytes (16-bit).
@@ -138,31 +148,87 @@ class NemotronStreamingASR(STTProvider):
                 raise RuntimeError("Failed to initialize model")
 
         self.stabilizer.reset()
-        cache = None
+        
+        # Collect audio chunks and transcribe periodically
+        audio_buffer = []
+        chunk_samples = int(self.config.chunk_size_ms * sample_rate / 1000)
+        chunk_bytes = chunk_samples * 2  # 16-bit audio = 2 bytes per sample
+        
+        accumulated_bytes = b""
         last_transcription = ""
 
-        async for chunk_bytes in audio_stream:
-            audio_int16 = np.frombuffer(chunk_bytes, dtype=np.int16)
-            audio_float = torch.from_numpy(
-                audio_int16.astype(np.float32) / 32768.0
-            ).unsqueeze(0).to(self.config.device)
+        async for chunk_data in audio_stream:
+            accumulated_bytes += chunk_data
+            
+            # Process when we have enough data
+            while len(accumulated_bytes) >= chunk_bytes:
+                # Extract chunk
+                chunk = accumulated_bytes[:chunk_bytes]
+                accumulated_bytes = accumulated_bytes[chunk_bytes:]
+                
+                # Append to buffer
+                audio_int16 = np.frombuffer(chunk, dtype=np.int16)
+                audio_buffer.append(audio_int16)
+                
+                # Transcribe accumulated audio
+                if len(audio_buffer) > 0:
+                    full_audio = np.concatenate(audio_buffer)
+                    transcription = await self._transcribe_numpy(full_audio, sample_rate)
+                    
+                    if transcription:
+                        last_transcription = transcription
+                        stable_delta, _, _ = self.stabilizer.update(transcription)
+                        if stable_delta:
+                            yield stable_delta, False
 
+        # Process remaining audio
+        if accumulated_bytes:
+            audio_int16 = np.frombuffer(accumulated_bytes, dtype=np.int16)
+            audio_buffer.append(audio_int16)
+
+        # Final transcription
+        if audio_buffer:
+            full_audio = np.concatenate(audio_buffer)
+            final_transcription = await self._transcribe_numpy(full_audio, sample_rate)
+            if final_transcription:
+                final_text = self.stabilizer.finalize(final_transcription)
+                if final_text:
+                    yield final_text, True
+
+    async def _transcribe_numpy(self, audio: np.ndarray, sample_rate: int) -> str:
+        """Transcribe numpy audio array.
+        
+        Args:
+            audio: Audio as int16 numpy array.
+            sample_rate: Sample rate of audio.
+            
+        Returns:
+            Transcribed text.
+        """
+        # Convert to float32
+        audio_float = audio.astype(np.float32) / 32768.0
+        
+        # NeMo's transcribe() expects file paths or numpy arrays
+        # Use numpy array directly via transcribe()
+        loop = asyncio.get_event_loop()
+        
+        def do_transcribe():
             with torch.no_grad():
-                transcription, cache = self.model.transcribe_streaming(
-                    audio_float, cache=cache, return_hypotheses=False
-                )
-
-            if transcription and transcription[0]:
-                last_transcription = transcription[0]
-                stable_delta, _, _ = self.stabilizer.update(transcription[0])
-                if stable_delta:
-                    yield stable_delta, False
-
-        # Finalize
-        if cache is not None:
-            final_text = self.stabilizer.finalize(last_transcription)
-            if final_text:
-                yield final_text, True
+                # Create a temporary file for the audio
+                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+                    temp_path = f.name
+                    sf.write(temp_path, audio_float, sample_rate)
+                
+                try:
+                    # Transcribe the temp file
+                    result = self.model.transcribe([temp_path])
+                    return result[0] if result else ""
+                finally:
+                    # Clean up temp file
+                    if os.path.exists(temp_path):
+                        os.unlink(temp_path)
+        
+        return await loop.run_in_executor(None, do_transcribe)
 
     async def transcribe(
         self,
@@ -189,14 +255,8 @@ class NemotronStreamingASR(STTProvider):
                 raise RuntimeError("Failed to initialize model")
 
         audio_int16 = np.frombuffer(audio_data, dtype=np.int16)
-        audio_float = torch.from_numpy(
-            audio_int16.astype(np.float32) / 32768.0
-        ).unsqueeze(0).to(self.config.device)
-
-        with torch.no_grad():
-            transcriptions = self.model.transcribe([audio_float])
-
-        text = transcriptions[0] if transcriptions else ""
+        text = await self._transcribe_numpy(audio_int16, sample_rate)
+        
         duration = len(audio_data) / (sample_rate * sample_width * channels)
 
         return STTResult(
