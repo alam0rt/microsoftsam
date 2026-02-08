@@ -10,7 +10,6 @@ Provides consistent, structured logging with:
 import json
 import logging
 import sys
-import time
 from datetime import datetime
 from typing import Any
 

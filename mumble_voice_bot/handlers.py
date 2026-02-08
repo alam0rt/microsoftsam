@@ -5,7 +5,7 @@ handling of Mumble events while keeping the main bot class focused
 on voice processing logic.
 """
 
-import logging
+import asyncio
 import random
 import threading
 from datetime import datetime
@@ -21,11 +21,12 @@ from mumble_voice_bot.interfaces.events import (
     UserLeftEvent,
     UserUpdatedEvent,
 )
+from mumble_voice_bot.logging_config import get_logger
 
 if TYPE_CHECKING:
     from mumble_tts_bot import MumbleTTSBot
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class PresenceHandler(MumbleEventHandler):
@@ -63,6 +64,7 @@ class PresenceHandler(MumbleEventHandler):
 
     def subscribed_events(self) -> set[EventType]:
         return {
+            EventType.CONNECTED,
             EventType.USER_CREATED,
             EventType.USER_UPDATED,
             EventType.USER_REMOVED,
@@ -78,9 +80,87 @@ class PresenceHandler(MumbleEventHandler):
         with self._lock:
             return session_id in self._users_in_channel
 
+    async def on_connected(self, event: ConnectedEvent) -> None:
+        """Bot connected to server - scan existing channel users and greet."""
+        logger.info("Bot connected, scanning channel users...")
+
+        # Give Mumble a moment to sync user list
+        await asyncio.sleep(0.5)
+
+        await self._scan_channel_users()
+
+    async def _scan_channel_users(self) -> None:
+        """Scan current channel for existing users and optionally greet."""
+        try:
+            my_session = self._bot.mumble.users.myself_session
+            my_channel = self._bot.mumble.users.myself["channel_id"]
+        except Exception as e:
+            logger.warning(f"Could not get bot's channel info: {e}")
+            return
+
+        # Find all users in our channel
+        users_found = []
+        for user in self._bot.mumble.users.values():
+            session_id = user.get("session")
+            channel_id = user.get("channel_id")
+            name = user.get("name", "Unknown")
+
+            # Skip ourselves
+            if session_id == my_session:
+                continue
+
+            # Only track users in our channel
+            if channel_id == my_channel:
+                with self._lock:
+                    self._users_in_channel[session_id] = name
+                users_found.append(name)
+
+        if users_found:
+            logger.info(f"Found {len(users_found)} user(s) in channel: {', '.join(users_found)}")
+            # Generate a greeting for all users
+            if self._greet_on_join:
+                await self._greet_channel(users_found)
+        else:
+            logger.info("Channel is empty")
+
+    async def _greet_channel(self, users: list[str]) -> None:
+        """Generate and speak a greeting for users already in the channel."""
+        time_of_day = self._get_time_of_day()
+
+        if len(users) == 1:
+            user_desc = users[0]
+        elif len(users) == 2:
+            user_desc = f"{users[0]} and {users[1]}"
+        else:
+            user_desc = f"{', '.join(users[:-1])}, and {users[-1]}"
+
+        # Use LLM if available
+        if self._bot.llm:
+            try:
+                greeting_prompt = (
+                    f"You just joined a voice channel. It's {time_of_day}. "
+                    f"Already here: {user_desc}. "
+                    "Give a brief, casual greeting acknowledging them. One sentence max."
+                )
+                response = self._bot._generate_oneoff_response_sync(greeting_prompt)
+                if response:
+                    logger.info(f"Greeting channel: {response}")
+                    self._bot.speak(response)
+                    return
+            except Exception as e:
+                logger.warning(f"LLM channel greeting failed: {e}")
+
+        # Fallback greeting
+        if len(users) == 1:
+            fallback = f"Hey {users[0]}!"
+        else:
+            fallback = "Hey everyone!"
+        logger.info(f"Greeting channel (fallback): {fallback}")
+        self._bot.speak(fallback)
+
     async def on_user_joined(self, event: UserJoinedEvent) -> None:
         """User connected to server - just log it."""
-        logger.debug(f"User {event.name} connected to server (session={event.session_id})")
+        logger.info(f"User {event.name} connected to server (session={event.session_id})")
         # Don't greet here - wait for them to join our channel
 
     async def on_user_updated(self, event: UserUpdatedEvent) -> None:
@@ -111,8 +191,9 @@ class PresenceHandler(MumbleEventHandler):
                 self._users_in_channel[event.session_id] = event.name
 
             if not was_in_channel:
-                logger.info(f"User {event.name} joined channel")
+                logger.info(f"User {event.name} joined our channel")
                 if self._greet_on_join:
+                    logger.debug(f"Generating greeting for {event.name}")
                     await self._greet_user(event.name, event.session_id)
         else:
             # User left our channel
@@ -121,7 +202,7 @@ class PresenceHandler(MumbleEventHandler):
                     del self._users_in_channel[event.session_id]
 
             if was_in_channel:
-                logger.info(f"User {event.name} left channel")
+                logger.info(f"User {event.name} left our channel")
 
     async def on_user_left(self, event: UserLeftEvent) -> None:
         """User disconnected from server."""
@@ -158,6 +239,7 @@ class PresenceHandler(MumbleEventHandler):
             try:
                 greeting = await self._greeting_generator(user_name, time_of_day)
                 if greeting:
+                    logger.info(f"Greeting {user_name}: {greeting}")
                     self._bot.speak(greeting)
                     return
             except Exception as e:
@@ -172,6 +254,7 @@ class PresenceHandler(MumbleEventHandler):
                 )
                 response = self._bot._generate_oneoff_response_sync(greeting_prompt)
                 if response:
+                    logger.info(f"Greeting {user_name}: {response}")
                     self._bot.speak(response)
                     return
             except Exception as e:
@@ -184,7 +267,9 @@ class PresenceHandler(MumbleEventHandler):
             f"Yo {user_name}, what's up?",
             f"Hey! {user_name}'s here.",
         ]
-        self._bot.speak(random.choice(greetings))
+        fallback = random.choice(greetings)
+        logger.info(f"Greeting {user_name} (fallback): {fallback}")
+        self._bot.speak(fallback)
 
     @staticmethod
     def _get_time_of_day() -> str:

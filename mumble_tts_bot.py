@@ -1163,7 +1163,10 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 self._maybe_respond(user_id, user_name, tracker=tracker)
                 return
 
-            logger.asr(user_name, text, buffer_duration * 1000, transcribe_time * 1000)
+            # Log the full transcription with timing
+            logger.info(f'ASR ({transcribe_time*1000:.0f}ms): "{text}" [from {user_name}, {buffer_duration:.1f}s audio]')
+            if transcribe_time > 2.0:
+                logger.warning(f"ASR slow: {transcribe_time*1000:.0f}ms (>2s)")
 
             # Accumulate text
             current_time = time.time()
@@ -1201,7 +1204,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 if tracker:
                     tracker.llm_start()
 
-                logger.debug(f'LLM generating response to: "{text[:100]}"')
+                logger.info(f'Generating response for {user_name}: "{text}"')
                 llm_start = time.time()
 
                 try:
@@ -1227,7 +1230,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                     if total_latency > 3.0:
                         logger.warning(f"High latency: {total_latency:.1f}s since user stopped", extra={"latency_ms": total_latency * 1000})
 
-                    logger.llm(len(text), len(response), llm_time * 1000)
+                    logger.info(f'Queuing TTS: "{response}" (LLM took {llm_time*1000:.0f}ms)')
 
                     # Queue TTS with timing metadata and tracker
                     self._tts_queue.put((response, self.voice_prompt, pipeline_start, user_id, tracker))
@@ -1301,7 +1304,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             self.turn_controller.start_speaking()
 
         try:
-            print(f"[TTS] Generating: \"{text[:50]}{'...' if len(text) > 50 else ''}\"")
+            logger.info(f'TTS generating: \"{text[:80]}...\"' if len(text) > 80 else f'TTS generating: \"{text}\"')
 
             first_chunk = True
             total_audio_samples = 0
@@ -1311,14 +1314,16 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             ):
                 # Check for barge-in cancellation
                 if self.turn_controller and self.turn_controller.is_cancelled():
-                    print("[TTS] Cancelled due to barge-in")
+                    logger.info("TTS cancelled due to barge-in")
                     break
 
                 if first_chunk:
                     tts_first_chunk = time.time() - tts_start
                     if pipeline_start:
                         total_latency = time.time() - pipeline_start
-                        print(f"[Timing] First audio chunk: TTS={tts_first_chunk:.2f}s, Total={total_latency:.2f}s")
+                        logger.info(f"TTS first audio: {tts_first_chunk*1000:.0f}ms, pipeline total: {total_latency*1000:.0f}ms")
+                        if total_latency > 2.0:
+                            logger.warning(f"Pipeline slow: {total_latency*1000:.0f}ms (>2s) to first audio")
                     # Mark TTS first audio in tracker
                     if tracker:
                         tracker.tts_first_audio()
@@ -1343,7 +1348,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
             if pipeline_start:
                 pipeline_total = time.time() - pipeline_start
-                print(f"[Timing] Complete: TTS={tts_total:.2f}s, Pipeline={pipeline_total:.2f}s")
+                logger.info(f"TTS complete: {tts_total*1000:.0f}ms synthesis, {audio_duration_ms:.0f}ms audio, pipeline total: {pipeline_total*1000:.0f}ms")
         finally:
             self._speaking.clear()
             # Reset turn controller to idle

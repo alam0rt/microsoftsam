@@ -10,11 +10,15 @@ This provider works with any service that implements the OpenAI Chat Completions
 """
 
 import json
+import time
 from typing import AsyncIterator
 
 import httpx
 
 from mumble_voice_bot.interfaces.llm import LLMProvider, LLMResponse
+from mumble_voice_bot.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class OpenAIChatLLM(LLMProvider):
@@ -127,6 +131,13 @@ class OpenAIChatLLM(LLMProvider):
         headers = self._build_headers()
         body = self._build_request_body(messages)
 
+        # Log the request
+        user_message = messages[-1].get("content", "") if messages else ""
+        logger.info(f'LLM request: "{user_message[:100]}..."' if len(user_message) > 100 else f'LLM request: "{user_message}"')
+        logger.debug(f"LLM full request: model={self.model}, messages={len(body['messages'])}")
+
+        start_time = time.time()
+
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 self.endpoint,
@@ -137,6 +148,8 @@ class OpenAIChatLLM(LLMProvider):
             response.raise_for_status()
             data = response.json()
 
+        latency_ms = (time.time() - start_time) * 1000
+
         # Extract the response content
         content = data["choices"][0]["message"]["content"]
 
@@ -145,6 +158,11 @@ class OpenAIChatLLM(LLMProvider):
         if "<think>" in content and "</think>" in content:
             import re
             content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+
+        # Log the response
+        logger.info(f'LLM response ({latency_ms:.0f}ms): "{content[:100]}..."' if len(content) > 100 else f'LLM response ({latency_ms:.0f}ms): "{content}"')
+        if latency_ms > 2000:
+            logger.warning(f"LLM slow response: {latency_ms:.0f}ms (>2s)")
 
         return LLMResponse(
             content=content,

@@ -10,6 +10,7 @@ mumble_voice_bot/__init__.py
 mumble_voice_bot/config.py
 mumble_voice_bot/handlers.py
 mumble_voice_bot/latency.py
+mumble_voice_bot/logging_config.py
 mumble_voice_bot/phrase_chunker.py
 mumble_voice_bot/pipeline.py
 mumble_voice_bot/transcript_stabilizer.py

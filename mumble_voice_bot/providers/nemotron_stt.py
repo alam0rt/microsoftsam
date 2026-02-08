@@ -9,8 +9,8 @@ Time-to-first-token: ~24ms (80ms chunk)
 
 import asyncio
 import logging
-import tempfile
 import os
+import tempfile
 from dataclasses import dataclass
 from typing import AsyncIterator
 
@@ -24,8 +24,8 @@ logger = logging.getLogger(__name__)
 # Lazy import NeMo to allow graceful fallback
 try:
     import nemo.collections.asr as nemo_asr
-    import torch
     import soundfile as sf
+    import torch
     NEMO_AVAILABLE = True
 except ImportError:
     NEMO_AVAILABLE = False
@@ -148,35 +148,33 @@ class NemotronStreamingASR(STTProvider):
                 raise RuntimeError("Failed to initialize model")
 
         self.stabilizer.reset()
-        
+
         # Collect audio chunks and transcribe periodically
         audio_buffer = []
         chunk_samples = int(self.config.chunk_size_ms * sample_rate / 1000)
         chunk_bytes = chunk_samples * 2  # 16-bit audio = 2 bytes per sample
-        
+
         accumulated_bytes = b""
-        last_transcription = ""
 
         async for chunk_data in audio_stream:
             accumulated_bytes += chunk_data
-            
+
             # Process when we have enough data
             while len(accumulated_bytes) >= chunk_bytes:
                 # Extract chunk
                 chunk = accumulated_bytes[:chunk_bytes]
                 accumulated_bytes = accumulated_bytes[chunk_bytes:]
-                
+
                 # Append to buffer
                 audio_int16 = np.frombuffer(chunk, dtype=np.int16)
                 audio_buffer.append(audio_int16)
-                
+
                 # Transcribe accumulated audio
                 if len(audio_buffer) > 0:
                     full_audio = np.concatenate(audio_buffer)
                     transcription = await self._transcribe_numpy(full_audio, sample_rate)
-                    
+
                     if transcription:
-                        last_transcription = transcription
                         stable_delta, _, _ = self.stabilizer.update(transcription)
                         if stable_delta:
                             yield stable_delta, False
@@ -197,52 +195,52 @@ class NemotronStreamingASR(STTProvider):
 
     async def _transcribe_numpy(self, audio: np.ndarray, sample_rate: int) -> str:
         """Transcribe numpy audio array.
-        
+
         Args:
             audio: Audio as int16 numpy array.
             sample_rate: Sample rate of audio.
-            
+
         Returns:
             Transcribed text.
         """
         # Convert to float32
         audio_float = audio.astype(np.float32) / 32768.0
-        
+
         # NeMo's transcribe() expects file paths or numpy arrays
         # Use numpy array directly via transcribe()
         loop = asyncio.get_event_loop()
-        
+
         def do_transcribe():
             with torch.no_grad():
                 # Create a temporary file for the audio
                 with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
                     temp_path = f.name
                     sf.write(temp_path, audio_float, sample_rate)
-                
+
                 try:
                     # Transcribe the temp file
                     # NeMo returns list of transcriptions (strings or Hypothesis objects)
                     result = self.model.transcribe([temp_path])
                     if not result:
                         return ""
-                    
+
                     text = result[0]
-                    
+
                     # Handle nested lists (NeMo sometimes returns [[text]])
                     while isinstance(text, list) and len(text) > 0:
                         text = text[0]
-                    
+
                     # Handle Hypothesis objects (have .text attribute)
                     if hasattr(text, 'text'):
                         text = text.text
-                    
+
                     # Ensure we return a string
                     return str(text).strip() if text else ""
                 finally:
                     # Clean up temp file
                     if os.path.exists(temp_path):
                         os.unlink(temp_path)
-        
+
         return await loop.run_in_executor(None, do_transcribe)
 
     async def transcribe(
@@ -271,7 +269,7 @@ class NemotronStreamingASR(STTProvider):
 
         audio_int16 = np.frombuffer(audio_data, dtype=np.int16)
         text = await self._transcribe_numpy(audio_int16, sample_rate)
-        
+
         duration = len(audio_data) / (sample_rate * sample_width * channels)
 
         return STTResult(
