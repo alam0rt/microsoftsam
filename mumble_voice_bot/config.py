@@ -512,6 +512,13 @@ def load_config(path: str | Path | None = None) -> BotConfig:
             for key, value in soul_config.llm.items():
                 if key not in llm_data:
                     llm_data[key] = value
+
+            # Auto-load soul's personality.md if no personality is set
+            if "personality" not in llm_data:
+                personality_path = souls_dir / soul_name / "personality.md"
+                if personality_path.exists():
+                    llm_data["personality"] = str(personality_path)
+                    logger.info(f"Using soul personality: {personality_path}")
         except FileNotFoundError as e:
             logger.warning(f"Soul not found: {e}")
 
