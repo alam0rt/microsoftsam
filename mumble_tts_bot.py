@@ -211,24 +211,18 @@ class StreamingLuxTTS(LuxTTS):
         return_smooth: bool = False
     ) -> Generator[torch.Tensor, None, None]:
         """Stream speech generation by splitting text into sentences."""
-        print(f"[TTS-STREAM] Starting generate_speech_streaming for: '{text[:50]}...'")
         text = _pad_tts_text(text)
         if not text:
-            print("[TTS-STREAM] Text empty after padding, returning")
             return
 
-        print(f"[TTS-STREAM] Splitting into sentences...")
         sentences = split_into_sentences(text)
-        print(f"[TTS-STREAM] Got {len(sentences)} sentences")
 
         if len(sentences) <= 1:
             # Pad very short text to avoid vocoder kernel size issues
             # Vocoder kernel needs 7+ frames, requiring substantial text
             padded_text = _pad_tts_text(text)
             if not padded_text:
-                print("[TTS-STREAM] Padded text empty, returning")
                 return
-            print(f"[TTS-STREAM] Single sentence, calling _generate_speech_safe...")
             wav = self._generate_speech_safe(
                 padded_text,
                 encode_dict,
@@ -243,19 +237,14 @@ class StreamingLuxTTS(LuxTTS):
             return
 
         for i, sentence in enumerate(sentences):
-            print(f"[TTS-STREAM] Processing sentence {i+1}/{len(sentences)}: '{sentence[:30]}...'")
             sentence = sentence.strip()
             if not sentence:
-                print(f"[TTS-STREAM] Sentence {i+1} empty after strip")
                 continue
             # Pad very short sentences to avoid vocoder kernel size issues
             # The vocoder needs at least 7 frames, which requires ~20+ chars
             padded = _pad_tts_text(sentence)
-            print(f"[TTS-STREAM] Sentence {i+1} after padding: '{padded[:40]}...' ({len(padded)} chars)")
             if not padded:
-                print(f"[TTS-STREAM] Sentence {i+1} empty after padding, skipping")
                 continue
-            print(f"[TTS-STREAM] Sentence {i+1} calling _generate_speech_safe...")
             wav = self._generate_speech_safe(
                 padded,
                 encode_dict,
@@ -265,13 +254,8 @@ class StreamingLuxTTS(LuxTTS):
                 speed=speed,
                 return_smooth=return_smooth,
             )
-            print(f"[TTS-STREAM] Sentence {i+1} _generate_speech_safe returned")
             if wav is not None:
-                print(f"[TTS-STREAM] Yielding sentence {i+1}")
                 yield wav
-                print(f"[TTS-STREAM] Returned from yield for sentence {i+1}")
-            else:
-                print(f"[TTS-STREAM] Sentence {i+1} wav was None")
 
     def _generate_speech_safe(
         self,
@@ -283,11 +267,8 @@ class StreamingLuxTTS(LuxTTS):
         speed: float = 1.0,
         return_smooth: bool = False,
     ) -> torch.Tensor | None:
-        import time as _time
-        tts_gen_start = _time.time()
-        print(f"[TTS-DEBUG] Starting generate_speech for '{text[:40]}...' ({len(text)} chars)")
         try:
-            result = self.generate_speech(
+            return self.generate_speech(
                 text,
                 encode_dict,
                 num_steps=num_steps,
@@ -296,13 +277,10 @@ class StreamingLuxTTS(LuxTTS):
                 speed=speed,
                 return_smooth=return_smooth,
             )
-            tts_gen_time = _time.time() - tts_gen_start
-            print(f"[TTS-DEBUG] generate_speech completed in {tts_gen_time*1000:.0f}ms")
-            return result
         except RuntimeError as e:
             message = str(e)
             if "Kernel size" in message or "kernel size" in message or "padded input size" in message:
-                padded = _pad_tts_text(text, min_chars=160, min_words=24)
+                padded = _pad_tts_text(text, min_chars=160)
                 if padded and padded != text:
                     try:
                         return self.generate_speech(
@@ -315,18 +293,12 @@ class StreamingLuxTTS(LuxTTS):
                             return_smooth=return_smooth,
                         )
                     except Exception as retry_error:
-                        print(f"[TTS] Retry failed after padding: {retry_error}")
-                        import traceback
-                        traceback.print_exc()
+                        logger.warning(f"TTS retry failed after padding: {retry_error}")
                         return None
-            print(f"[TTS] Error generating speech for '{text[:50]}': {e}")
-            import traceback
-            traceback.print_exc()
+            logger.warning(f"TTS error for '{text[:50]}': {e}")
             return None
         except Exception as e:
-            print(f"[TTS] Error generating speech for '{text[:50]}': {e}")
-            import traceback
-            traceback.print_exc()
+            logger.warning(f"TTS error for '{text[:50]}': {e}")
             return None
 
 
@@ -492,9 +464,14 @@ class MumbleVoiceBot:
         self.pending_text_time = {}  # user_id -> timestamp of last text
         self.pending_text_timeout = 1.5  # seconds to wait for more speech before responding
 
-        # Conversation state per user
+        # Conversation state - SHARED channel history (not per-user)
+        self.channel_history = []  # List of {"role": str, "content": str, "speaker": str, "time": float}
+        self.channel_history_max = 30  # Keep last 30 messages
+        self.conversation_timeout = 300.0  # 5 minutes - clear history after inactivity
+        self.last_activity_time = time.time()
+        
+        # Legacy per-user history (kept for compatibility)
         self.conversation_history = {}  # user_id -> list of messages
-        self.conversation_timeout = 300.0  # 5 minutes
         self.last_conversation_time = {}  # user_id -> timestamp
 
         # State flags
@@ -951,51 +928,100 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         return " ".join(context_parts)
 
     # =========================================================================
-    # Conversation Management
+    # Conversation Management - Shared Channel History
     # =========================================================================
 
-    def _get_history(self, user_id: int) -> list[dict]:
-        """Get conversation history for a user, clearing if stale."""
+    def _get_channel_history(self) -> list[dict]:
+        """Get shared channel conversation history, clearing if stale."""
         current_time = time.time()
+        
+        # Clear history if conversation went stale
+        if current_time - self.last_activity_time > self.conversation_timeout:
+            if self.channel_history:
+                print(f"[Chat] Cleared stale channel history ({len(self.channel_history)} messages)")
+            self.channel_history = []
+        
+        self.last_activity_time = current_time
+        return self.channel_history
+    
+    def _add_to_channel_history(self, role: str, content: str, speaker: str = None):
+        """Add a message to shared channel history.
+        
+        Args:
+            role: "user" for human speakers, "assistant" for bot responses
+            content: The raw message content
+            speaker: Name of who said it (for user messages)
+        """
+        history = self._get_channel_history()
+        
+        # Format the content based on role
+        if role == "user" and speaker:
+            formatted_content = f"{speaker}: {content}"
+        else:
+            formatted_content = content
+        
+        history.append({
+            "role": role,
+            "content": formatted_content,
+            "speaker": speaker,
+            "time": time.time()
+        })
+        
+        # Trim to max size
+        if len(history) > self.channel_history_max:
+            self.channel_history = history[-self.channel_history_max:]
+    
+    def _build_llm_messages(self, current_speaker: str = None) -> list[dict]:
+        """Build LLM message list from channel history.
+        
+        Creates a natural conversation flow where the LLM can see
+        what everyone said, not just the current speaker.
+        """
+        messages = []
+        history = self._get_channel_history()
+        
+        # Add time context at the start
+        time_ctx = self._get_time_context()
+        channel_ctx = self._get_channel_context()
+        
+        # Build context preamble
+        context_parts = [f"[{time_ctx}]"]
+        if channel_ctx:
+            context_parts.append(f"[{channel_ctx}]")
+        
+        # Add recent conversation as context
+        if history:
+            # Group consecutive messages by role for cleaner context
+            for entry in history:
+                messages.append({
+                    "role": entry["role"],
+                    "content": entry["content"]
+                })
+        
+        # If no history yet, add context to first user message
+        if not messages and context_parts:
+            return messages  # Will be added with first actual message
+        
+        # Inject context into first user message if present
+        if messages and messages[0]["role"] == "user":
+            messages[0]["content"] = " ".join(context_parts) + " " + messages[0]["content"]
+        
+        return messages
 
-        if user_id in self.last_conversation_time:
-            elapsed = current_time - self.last_conversation_time[user_id]
-            if elapsed > self.conversation_timeout:
-                self.conversation_history.pop(user_id, None)
-                print(f"[Chat] Cleared stale history for user {user_id}")
-
-        self.last_conversation_time[user_id] = current_time
-
-        if user_id not in self.conversation_history:
-            self.conversation_history[user_id] = []
-
-        return self.conversation_history[user_id]
+    def _get_history(self, user_id: int) -> list[dict]:
+        """Get conversation history for a user, clearing if stale.
+        
+        NOTE: This now returns the shared channel history formatted for the LLM,
+        not per-user history. The user_id is kept for API compatibility.
+        """
+        return self._build_llm_messages()
 
     def _add_to_history(self, user_id: int, role: str, content: str, user_name: str = None, include_time: bool = False):
-        """Add a message to conversation history."""
-        history = self._get_history(user_id)
-
-        # For user messages, add context
-        if role == "user":
-            parts = []
-
-            # Add time context occasionally (first message or every 5th message)
-            if include_time or len(history) == 0 or len(history) % 5 == 0:
-                parts.append(f"[{self._get_time_context()}]")
-
-            # Add user name
-            if user_name:
-                parts.append(f"[{user_name} says]: {content}")
-            else:
-                parts.append(content)
-
-            content = " ".join(parts)
-
-        history.append({"role": role, "content": content})
-
-        # Keep last 20 messages
-        if len(history) > 20:
-            self.conversation_history[user_id] = history[-20:]
+        """Add a message to conversation history.
+        
+        NOTE: This now adds to the shared channel history.
+        """
+        self._add_to_channel_history(role, content, user_name)
 
     async def _generate_response(self, user_id: int, text: str, user_name: str = None) -> str:
         """Generate LLM response."""
@@ -1387,7 +1413,6 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 text, voice_prompt, num_steps=self.num_steps
             ):
                 chunk_count += 1
-                print(f"[TTS-LOOP] Received chunk {chunk_count}")
                 
                 # Check for barge-in cancellation
                 if self.turn_controller and self.turn_controller.is_cancelled():
@@ -1412,9 +1437,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 pcm = (wav_float * 32767).astype(np.int16)
                 chunk_samples = len(pcm)
                 total_audio_samples += chunk_samples
-                print(f"[TTS-LOOP] Chunk {chunk_count}: {chunk_samples} samples, calling add_sound...")
                 self.mumble.sound_output.add_sound(pcm.tobytes())
-                print(f"[TTS-LOOP] Chunk {chunk_count}: add_sound completed")
                 
                 # Wait for most of the audio to play before generating next chunk
                 # This creates natural pauses between sentences and prevents buffer overflow
@@ -1423,7 +1446,6 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 # Wait for 80% of audio duration to create natural pacing
                 wait_time = chunk_duration_sec * 0.8
                 if wait_time > 0.1:
-                    print(f"[TTS-LOOP] Waiting {wait_time:.2f}s for audio playback...")
                     time.sleep(wait_time)
 
             tts_total = time.time() - tts_start
