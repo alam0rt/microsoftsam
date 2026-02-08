@@ -266,8 +266,11 @@ class StreamingLuxTTS(LuxTTS):
         speed: float = 1.0,
         return_smooth: bool = False,
     ) -> torch.Tensor | None:
+        import time as _time
+        tts_gen_start = _time.time()
+        print(f"[TTS-DEBUG] Starting generate_speech for '{text[:40]}...' ({len(text)} chars)")
         try:
-            return self.generate_speech(
+            result = self.generate_speech(
                 text,
                 encode_dict,
                 num_steps=num_steps,
@@ -276,6 +279,9 @@ class StreamingLuxTTS(LuxTTS):
                 speed=speed,
                 return_smooth=return_smooth,
             )
+            tts_gen_time = _time.time() - tts_gen_start
+            print(f"[TTS-DEBUG] generate_speech completed in {tts_gen_time*1000:.0f}ms")
+            return result
         except RuntimeError as e:
             message = str(e)
             if "Kernel size" in message or "kernel size" in message or "padded input size" in message:
