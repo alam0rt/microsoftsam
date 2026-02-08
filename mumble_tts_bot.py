@@ -957,6 +957,54 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
         print(f"[Tools] Initialized with {len(self.tools)} tool(s): {self.tools.tool_names}")
 
+    async def _check_keyword_tools(self, text: str) -> str | None:
+        """Check for keyword-based tool triggers.
+        
+        This is a fallback for models that don't reliably generate tool calls.
+        Returns a response string if a tool was triggered, None otherwise.
+        """
+        if not self.tools:
+            return None
+            
+        text_lower = text.lower()
+        
+        # Soul switching keywords
+        switch_patterns = [
+            "switch to the", "switch to", "change to the", "change to",
+            "use the", "be the", "become the", "switch soul to",
+        ]
+        
+        for pattern in switch_patterns:
+            if pattern in text_lower:
+                # Extract what comes after the pattern
+                idx = text_lower.find(pattern) + len(pattern)
+                remainder = text_lower[idx:].strip()
+                
+                # Look for soul name - common patterns like "raf soul", "raf", "raf personality"
+                soul_name = remainder.split()[0] if remainder.split() else None
+                if soul_name:
+                    # Clean up common suffixes
+                    soul_name = soul_name.rstrip(".,!?")
+                    for suffix in ["soul", "personality", "voice", "character"]:
+                        if soul_name.endswith(suffix):
+                            soul_name = soul_name[:-len(suffix)].strip()
+                    
+                    if soul_name:
+                        logger.info(f"Keyword trigger: switching to soul '{soul_name}'")
+                        result = await self.tools.execute("souls", {
+                            "action": "switch",
+                            "soul_name": soul_name
+                        })
+                        return f"Switching to {soul_name}. {result}"
+        
+        # List souls keywords
+        if any(phrase in text_lower for phrase in ["list souls", "what souls", "available souls", "show souls"]):
+            logger.info("Keyword trigger: listing souls")
+            result = await self.tools.execute("souls", {"action": "list"})
+            return f"Here are the available souls: {result}"
+        
+        return None
+
     # =========================================================================
     # Soul Management
     # =========================================================================
@@ -1201,11 +1249,20 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         """Generate LLM response, executing any tool calls.
 
         This method implements a tool execution loop:
-        1. Send user message + tool definitions to LLM
-        2. If LLM returns tool calls, execute them
-        3. Send tool results back to LLM
-        4. Repeat until LLM returns a text response (max 5 iterations)
+        1. Check for keyword-based tool triggers (fallback for models without tool support)
+        2. Send user message + tool definitions to LLM
+        3. If LLM returns tool calls, execute them
+        4. Send tool results back to LLM
+        5. Repeat until LLM returns a text response (max 5 iterations)
         """
+        # Check for keyword-based tool triggers first
+        # This helps with models that don't reliably use tool calling
+        keyword_result = await self._check_keyword_tools(text)
+        if keyword_result:
+            self._add_to_history(user_id, "user", text, user_name)
+            self._add_to_history(user_id, "assistant", keyword_result)
+            return keyword_result
+
         self._add_to_history(user_id, "user", text, user_name)
 
         # Build messages for LLM

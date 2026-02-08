@@ -232,6 +232,9 @@ class OpenAIChatLLM(LLMProvider):
         
         # For text-based tool formats (e.g., LFM2.5), parse from content
         if not tool_calls and content and tools:
+            # Log raw content for debugging tool call detection
+            if "<|tool_call" in content or "tool_call" in content.lower():
+                logger.info(f"Potential tool call in response: {content[:200]}")
             text_tool_calls = self._tool_formatter.parse_tool_calls(content)
             if text_tool_calls:
                 tool_calls = text_tool_calls
