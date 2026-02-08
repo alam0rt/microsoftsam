@@ -233,6 +233,74 @@ class ModelsConfig:
 
 
 @dataclass
+class SoulFallbacks:
+    """Fallback responses for when the LLM is unavailable.
+
+    These provide character-appropriate responses without LLM generation.
+    Each list is selected from randomly when needed.
+
+    Attributes:
+        greetings: Fallback greetings when users join the channel.
+        farewells: Fallback farewells when users leave.
+        acknowledgments: Brief acknowledgments for commands/requests.
+        idle_chatter: Random things the bot might say when idle.
+        errors: Responses when something goes wrong.
+    """
+    greetings: list[str] = field(default_factory=lambda: [
+        "Hey {user}!",
+        "Oh hey, {user}.",
+        "Hey! {user}'s here.",
+    ])
+    farewells: list[str] = field(default_factory=lambda: [
+        "See ya, {user}.",
+        "Later, {user}!",
+        "Bye {user}.",
+    ])
+    acknowledgments: list[str] = field(default_factory=lambda: [
+        "Got it.",
+        "Okay.",
+        "Sure thing.",
+    ])
+    idle_chatter: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=lambda: [
+        "Hmm, something went wrong.",
+        "Uh, I'm having trouble with that.",
+        "Sorry, I can't do that right now.",
+    ])
+
+
+@dataclass
+class SoulConfig:
+    """Soul configuration for character/personality theming.
+
+    A "soul" defines the character, voice, and behavior of the bot.
+    This includes voice cloning settings, LLM behavior overrides,
+    and fallback responses themed to the character.
+
+    Attributes:
+        name: Display name for the soul.
+        description: Brief description of the character.
+        author: Who created this soul.
+        version: Soul configuration version.
+        voice: TTS voice settings (overrides main config).
+        weights: Custom model weights paths.
+        llm: LLM behavior overrides (temperature, max_tokens, etc).
+        fallbacks: Fallback responses themed to the character.
+    """
+    name: str = "Default Soul"
+    description: str = ""
+    author: str = ""
+    version: str = "1.0.0"
+    voice: TTSConfig = field(default_factory=TTSConfig)
+    weights: dict[str, str | None] = field(default_factory=lambda: {
+        "tts_model": None,
+        "voice_encoder": None,
+    })
+    llm: dict[str, Any] = field(default_factory=dict)
+    fallbacks: SoulFallbacks = field(default_factory=SoulFallbacks)
+
+
+@dataclass
 class BotConfig:
     """Complete bot configuration.
 
@@ -243,6 +311,8 @@ class BotConfig:
         mumble: Mumble connection configuration.
         bot: Bot behavior configuration.
         models: Model storage/cache configuration.
+        soul: Soul name to load (from souls/ directory).
+        soul_config: Loaded soul configuration (populated by load_config).
     """
     llm: LLMConfig = field(default_factory=LLMConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
@@ -250,6 +320,72 @@ class BotConfig:
     mumble: MumbleConfig = field(default_factory=MumbleConfig)
     bot: PipelineBotConfig = field(default_factory=PipelineBotConfig)
     models: ModelsConfig = field(default_factory=ModelsConfig)
+    soul: str | None = None  # Soul name to load from souls/ directory
+    soul_config: SoulConfig | None = None  # Loaded soul configuration
+
+
+def load_soul_config(
+    soul_name: str,
+    souls_dir: str | Path = "souls",
+) -> SoulConfig:
+    """Load soul configuration from a soul.yaml file.
+
+    Args:
+        soul_name: Name of the soul (directory name under souls/).
+        souls_dir: Base directory containing soul directories.
+
+    Returns:
+        SoulConfig with loaded settings.
+
+    Raises:
+        FileNotFoundError: If the soul directory or soul.yaml doesn't exist.
+        yaml.YAMLError: If the soul.yaml file is invalid.
+    """
+    souls_path = Path(souls_dir)
+    soul_path = souls_path / soul_name
+    soul_yaml = soul_path / "soul.yaml"
+
+    if not soul_yaml.exists():
+        raise FileNotFoundError(f"Soul config not found: {soul_yaml}")
+
+    with open(soul_yaml) as f:
+        raw_config = yaml.safe_load(f) or {}
+
+    # Expand environment variables
+    config_data = _expand_env_vars(raw_config)
+
+    # Build voice config (with soul-relative paths)
+    voice_data = config_data.get("voice", {})
+    if "ref_audio" in voice_data:
+        ref_audio = voice_data["ref_audio"]
+        # Make relative paths relative to the soul directory
+        if not Path(ref_audio).is_absolute():
+            voice_data["ref_audio"] = str(soul_path / ref_audio)
+
+    voice = TTSConfig(**{k: v for k, v in voice_data.items() if v is not None})
+
+    # Build fallbacks config
+    fallbacks_data = config_data.get("fallbacks", {})
+    fallbacks = SoulFallbacks(
+        greetings=fallbacks_data.get("greetings", SoulFallbacks.greetings.default),
+        farewells=fallbacks_data.get("farewells", SoulFallbacks.farewells.default),
+        acknowledgments=fallbacks_data.get(
+            "acknowledgments", SoulFallbacks.acknowledgments.default
+        ),
+        idle_chatter=fallbacks_data.get("idle_chatter", []),
+        errors=fallbacks_data.get("errors", SoulFallbacks.errors.default),
+    )
+
+    return SoulConfig(
+        name=config_data.get("name", soul_name),
+        description=config_data.get("description", ""),
+        author=config_data.get("author", ""),
+        version=config_data.get("version", "1.0.0"),
+        voice=voice,
+        weights=config_data.get("weights", {"tts_model": None, "voice_encoder": None}),
+        llm=config_data.get("llm", {}),
+        fallbacks=fallbacks,
+    )
 
 
 def load_config(path: str | Path | None = None) -> BotConfig:
