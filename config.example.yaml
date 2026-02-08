@@ -83,3 +83,14 @@ models:
   # transformers_cache: "/data/models/transformers"  # TRANSFORMERS_CACHE - legacy
   # torch_home: "/data/models/torch"        # TORCH_HOME - PyTorch pretrained models
   # xdg_cache_home: "/data/cache"           # XDG_CACHE_HOME - Linux fallback cache
+
+# Tool system configuration (for LLM function calling)
+# Tools allow the LLM to perform actions like web searches
+tools:
+  enabled: true               # Enable/disable all tools
+  max_iterations: 5           # Max tool calls per user turn
+  
+  # Web search tool settings
+  web_search_enabled: true    # Enable web search capability
+  web_search_max_results: 5   # Number of search results to return
+  web_search_timeout: 10.0    # Search request timeout in seconds

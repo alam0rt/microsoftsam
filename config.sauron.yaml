@@ -1,7 +1,6 @@
 # Sauron Configuration for Mumble Voice Bot
 
-# Use the Raf soul (Magic: The Gathering enthusiast)
-soul: "raf"
+soul: "arnold"
 
 llm:
   endpoint: "https://openrouter.ai/api/v1/chat/completions"

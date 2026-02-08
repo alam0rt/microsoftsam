@@ -19,6 +19,7 @@ Usage:
 """
 import argparse
 import asyncio
+import json
 import os
 import queue
 import random
@@ -114,6 +115,17 @@ try:
 except ImportError as e:
     EVENT_SYSTEM_AVAILABLE = False
     logger.warning(f"Event system not available: {e}")
+
+# Import tool system
+try:
+    from mumble_voice_bot.tools import ToolRegistry
+    from mumble_voice_bot.tools.web_search import WebSearchTool
+    TOOLS_AVAILABLE = True
+except ImportError as e:
+    TOOLS_AVAILABLE = False
+    ToolRegistry = None
+    WebSearchTool = None
+    logger.warning(f"Tool system not available: {e}")
 
 
 # =============================================================================
@@ -622,6 +634,7 @@ class MumbleVoiceBot:
 
         # Initialize LLM
         self.llm = None
+        self.tools = None  # Tool registry for function calling
         if LLM_AVAILABLE:
             self._init_llm(
                 endpoint=llm_endpoint,
@@ -631,6 +644,8 @@ class MumbleVoiceBot:
                 personality=personality,
                 config_file=config_file,
             )
+            # Initialize tools after LLM
+            self._init_tools()
         else:
             print("[Warning] LLM not available - bot will only transcribe, not respond")
 
@@ -899,6 +914,23 @@ Keep responses to 1-2 sentences. Use casual language and contractions.
 Sound like a friend chatting, not a corporate assistant.
 Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
+    def _init_tools(self) -> None:
+        """Initialize the tool registry with available tools.
+
+        Tools enable the LLM to perform actions like web searches.
+        The LLM will decide when to use tools based on user queries.
+        """
+        if not TOOLS_AVAILABLE:
+            print("[Tools] Tool system not available")
+            return
+
+        self.tools = ToolRegistry()
+
+        # Register web search tool
+        self.tools.register(WebSearchTool(max_results=5, timeout=10.0))
+
+        print(f"[Tools] Initialized with {len(self.tools)} tool(s): {self.tools.tool_names}")
+
     # =========================================================================
     # Context & Awareness
     # =========================================================================
@@ -1055,14 +1087,83 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         self._add_to_channel_history(role, content, user_name)
 
     async def _generate_response(self, user_id: int, text: str, user_name: str = None) -> str:
-        """Generate LLM response."""
+        """Generate LLM response, executing any tool calls.
+
+        This method implements a tool execution loop:
+        1. Send user message + tool definitions to LLM
+        2. If LLM returns tool calls, execute them
+        3. Send tool results back to LLM
+        4. Repeat until LLM returns a text response (max 5 iterations)
+        """
         self._add_to_history(user_id, "user", text, user_name)
-        history = self._get_history(user_id)
 
-        response = await self.llm.chat(history)
+        # Build messages for LLM
+        messages = self._get_history(user_id)
 
-        self._add_to_history(user_id, "assistant", response.content)
-        return response.content
+        # Get tool definitions if tools are available
+        tools = self.tools.get_definitions() if self.tools else None
+
+        # Tool execution loop
+        max_iterations = 5
+        iteration = 0
+
+        while iteration < max_iterations:
+            iteration += 1
+
+            # Call LLM with tools
+            response = await self.llm.chat(messages, tools=tools)
+
+            # If LLM wants to call tools, execute them
+            if response.has_tool_calls:
+                # Add assistant message with tool calls to history
+                messages.append({
+                    "role": "assistant",
+                    "content": response.content or "",
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.name,
+                                "arguments": json.dumps(tc.arguments) if isinstance(tc.arguments, dict) else tc.arguments,
+                            }
+                        }
+                        for tc in response.tool_calls
+                    ]
+                })
+
+                # Execute each tool call
+                for tool_call in response.tool_calls:
+                    logger.info(f"Executing tool: {tool_call.name}({tool_call.arguments})")
+
+                    if self.tools:
+                        result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                    else:
+                        result = f"Error: Tool '{tool_call.name}' not available"
+
+                    # Add tool result to messages
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "name": tool_call.name,
+                        "content": result,
+                    })
+
+                # Continue loop to get LLM's response to tool results
+                continue
+
+            # LLM returned text response - we're done
+            if response.content:
+                self._add_to_history(user_id, "assistant", response.content)
+                return response.content
+
+            # No content and no tool calls - unusual, return empty
+            logger.warning("LLM returned empty response with no tool calls")
+            return ""
+
+        # Hit max iterations - return what we have or error
+        logger.warning(f"Tool loop hit max iterations ({max_iterations})")
+        return "Sorry, I got stuck in a loop trying to look that up."
 
     def _generate_response_sync(self, user_id: int, text: str, user_name: str = None) -> str:
         """Generate LLM response synchronously."""

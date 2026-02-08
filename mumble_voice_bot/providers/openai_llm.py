@@ -15,7 +15,7 @@ from typing import AsyncIterator
 
 import httpx
 
-from mumble_voice_bot.interfaces.llm import LLMProvider, LLMResponse
+from mumble_voice_bot.interfaces.llm import LLMProvider, LLMResponse, ToolCall
 from mumble_voice_bot.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -95,7 +95,7 @@ class OpenAIChatLLM(LLMProvider):
         full_messages.extend(messages)
         return full_messages
 
-    def _build_request_body(self, messages: list[dict]) -> dict:
+    def _build_request_body(self, messages: list[dict], tools: list[dict] | None = None) -> dict:
         """Build the request body for the API call."""
         body = {
             "model": self.model,
@@ -108,33 +108,41 @@ class OpenAIChatLLM(LLMProvider):
         if self.temperature is not None:
             body["temperature"] = self.temperature
 
+        # Add tools if provided
+        if tools:
+            body["tools"] = tools
+            # Let the model decide whether to use tools
+            body["tool_choice"] = "auto"
+
         return body
 
     async def chat(
         self,
         messages: list[dict],
-        context: dict | None = None
+        context: dict | None = None,
+        tools: list[dict] | None = None,
     ) -> LLMResponse:
         """Generate a chat completion response.
 
         Args:
             messages: List of message dicts with 'role' and 'content' keys.
             context: Optional context dict (currently unused, for future extensions).
+            tools: Optional list of tool definitions in OpenAI format.
 
         Returns:
-            LLMResponse with the generated text and metadata.
+            LLMResponse with the generated text, tool calls, and metadata.
 
         Raises:
             httpx.HTTPStatusError: If the API returns an error status.
             httpx.RequestError: If the request fails (network error, timeout, etc.).
         """
         headers = self._build_headers()
-        body = self._build_request_body(messages)
+        body = self._build_request_body(messages, tools)
 
         # Log the request
         user_message = messages[-1].get("content", "") if messages else ""
         logger.info(f'LLM request: "{user_message[:100]}..."' if len(user_message) > 100 else f'LLM request: "{user_message}"')
-        logger.debug(f"LLM full request: model={self.model}, messages={len(body['messages'])}")
+        logger.debug(f"LLM full request: model={self.model}, messages={len(body['messages'])}, tools={len(tools) if tools else 0}")
 
         start_time = time.time()
 
@@ -150,17 +158,41 @@ class OpenAIChatLLM(LLMProvider):
 
         latency_ms = (time.time() - start_time) * 1000
 
-        # Extract the response content
-        content = data["choices"][0]["message"]["content"]
+        # Extract the response message
+        message = data["choices"][0]["message"]
+        content = message.get("content")
+        finish_reason = data["choices"][0].get("finish_reason", "stop")
+
+        # Parse tool calls if present
+        tool_calls = []
+        if "tool_calls" in message and message["tool_calls"]:
+            for tc in message["tool_calls"]:
+                try:
+                    # Parse arguments from JSON string
+                    args = tc["function"].get("arguments", "{}")
+                    if isinstance(args, str):
+                        args = json.loads(args)
+
+                    tool_calls.append(ToolCall(
+                        id=tc["id"],
+                        name=tc["function"]["name"],
+                        arguments=args,
+                    ))
+                except (json.JSONDecodeError, KeyError) as e:
+                    logger.warning(f"Failed to parse tool call: {e}")
 
         # Handle models that include <think>...</think> tags (e.g., Qwen3)
         # Strip out thinking content for cleaner TTS output
-        if "<think>" in content and "</think>" in content:
+        if content and "<think>" in content and "</think>" in content:
             import re
             content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
 
         # Log the response
-        logger.info(f'LLM response ({latency_ms:.0f}ms): "{content[:100]}..."' if len(content) > 100 else f'LLM response ({latency_ms:.0f}ms): "{content}"')
+        if tool_calls:
+            logger.info(f'LLM response ({latency_ms:.0f}ms): {len(tool_calls)} tool call(s): {[tc.name for tc in tool_calls]}')
+        elif content:
+            logger.info(f'LLM response ({latency_ms:.0f}ms): "{content[:100]}..."' if len(content) > 100 else f'LLM response ({latency_ms:.0f}ms): "{content}"')
+
         if latency_ms > 2000:
             logger.warning(f"LLM slow response: {latency_ms:.0f}ms (>2s)")
 
@@ -168,24 +200,33 @@ class OpenAIChatLLM(LLMProvider):
             content=content,
             model=data.get("model"),
             usage=data.get("usage"),
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
         )
 
     async def chat_stream(
         self,
         messages: list[dict],
-        context: dict | None = None
+        context: dict | None = None,
+        tools: list[dict] | None = None,
     ) -> AsyncIterator[str]:
         """Stream chat completion tokens.
+
+        Note: Tool calling is not fully supported in streaming mode.
+        If tools are provided, they will be passed to the API but
+        tool calls may not be properly handled. Use non-streaming
+        chat() for reliable tool execution.
 
         Args:
             messages: List of message dicts with 'role' and 'content' keys.
             context: Optional context dict (unused).
+            tools: Optional tools (limited support in streaming).
 
         Yields:
             Text chunks as they arrive from the API.
         """
         headers = self._build_headers()
-        body = self._build_request_body(messages)
+        body = self._build_request_body(messages, tools)
         body["stream"] = True
 
         # Track if we're inside a <think> block (for models like Qwen3)

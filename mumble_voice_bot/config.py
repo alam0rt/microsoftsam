@@ -343,6 +343,24 @@ class SoulConfig:
 
 
 @dataclass
+class ToolsConfig:
+    """Configuration for agent tools.
+
+    Attributes:
+        enabled: Whether tools are enabled.
+        max_iterations: Maximum tool execution iterations per turn.
+        web_search: Web search tool configuration.
+    """
+    enabled: bool = True
+    max_iterations: int = 5
+
+    # Web search settings
+    web_search_enabled: bool = True
+    web_search_max_results: int = 5
+    web_search_timeout: float = 10.0
+
+
+@dataclass
 class BotConfig:
     """Complete bot configuration.
 
@@ -353,6 +371,7 @@ class BotConfig:
         mumble: Mumble connection configuration.
         bot: Bot behavior configuration.
         models: Model storage/cache configuration.
+        tools: Tool system configuration.
         soul: Soul name to load (from souls/ directory).
         soul_config: Loaded soul configuration (populated by load_config).
     """
@@ -362,6 +381,7 @@ class BotConfig:
     mumble: MumbleConfig = field(default_factory=MumbleConfig)
     bot: PipelineBotConfig = field(default_factory=PipelineBotConfig)
     models: ModelsConfig = field(default_factory=ModelsConfig)
+    tools: ToolsConfig = field(default_factory=ToolsConfig)
     soul: str | None = None  # Soul name to load from souls/ directory
     soul_config: SoulConfig | None = None  # Loaded soul configuration
 
@@ -486,6 +506,7 @@ def load_config(path: str | Path | None = None) -> BotConfig:
     mumble_data = config_data.get("mumble", {})
     bot_data = config_data.get("bot", {})
     models_data = config_data.get("models", {})
+    tools_data = config_data.get("tools", {})
     soul_name = config_data.get("soul")
 
     # Load soul configuration if specified
@@ -529,6 +550,7 @@ def load_config(path: str | Path | None = None) -> BotConfig:
         mumble=MumbleConfig(**{k: v for k, v in mumble_data.items() if v is not None}),
         bot=PipelineBotConfig(**{k: v for k, v in bot_data.items() if v is not None}),
         models=ModelsConfig(**{k: v for k, v in models_data.items() if v is not None}),
+        tools=ToolsConfig(**{k: v for k, v in tools_data.items() if v is not None}),
         soul=soul_name,
         soul_config=soul_config,
     )
