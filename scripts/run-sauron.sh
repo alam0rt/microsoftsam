@@ -7,6 +7,7 @@
 #   ./scripts/run-sauron.sh status   # Check status
 #   ./scripts/run-sauron.sh logs     # Follow logs
 #   ./scripts/run-sauron.sh restart  # Restart the bot
+#   ./scripts/run-sauron.sh sync-voices  # Sync voice files (not in git)
 
 set -euo pipefail
 
@@ -14,12 +15,36 @@ UNIT_NAME="mumble-voice-bot"
 REMOTE="sam@sauron"
 WORKDIR="/srv/share/sam/projects/microsoftsam"
 CONFIG="config.sauron.yaml"
+REPO_URL="git@github.com:alam0rt/microsoftsam.git"
 
-# Sync local changes to sauron first
+# Sync code changes via git
 sync_changes() {
-    echo "Syncing changes to sauron..."
-    rsync -av --exclude='.venv*' --exclude='__pycache__' --exclude='*.egg-info' \
-        --exclude='.git' --exclude='*.pyc' --exclude='latency.jsonl' \
+    echo "Syncing changes to sauron via git..."
+    ssh "${REMOTE}" << EOF
+set -e
+if [ ! -d "${WORKDIR}/.git" ]; then
+    echo "Cloning repository..."
+    mkdir -p "$(dirname ${WORKDIR})"
+    git clone "${REPO_URL}" "${WORKDIR}"
+else
+    echo "Pulling latest changes..."
+    cd "${WORKDIR}"
+    git fetch origin
+    git reset --hard origin/main
+fi
+EOF
+}
+
+# Sync voice files and other non-git assets
+# TODO: Add voice reference files (*.wav) to this sync
+# TODO: Add any model files or large assets that shouldn't be in git
+sync_voices() {
+    echo "Syncing voice files to sauron..."
+    rsync -av --progress \
+        --include='*.wav' \
+        --include='voices/' \
+        --include='voices/**' \
+        --exclude='*' \
         . "${REMOTE}:${WORKDIR}/"
 }
 
@@ -76,8 +101,11 @@ case "${1:-start}" in
     logs-recent)
         logs_recent
         ;;
+    sync-voices)
+        sync_voices
+        ;;
     *)
-        echo "Usage: $0 {start|stop|restart|status|logs|logs-recent}"
+        echo "Usage: $0 {start|stop|restart|status|logs|logs-recent|sync-voices}"
         exit 1
         ;;
 esac
