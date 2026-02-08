@@ -1281,6 +1281,8 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 # Check if cancelled by barge-in
                 if self.turn_controller and self.turn_controller.is_cancelled():
                     print("[TTS] Skipping - cancelled by barge-in")
+                    # Reset turn controller so future TTS works
+                    self.turn_controller.reset()
                     continue
 
                 # Check if response is too old
