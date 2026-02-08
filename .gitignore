@@ -4,6 +4,15 @@
 .venv-*
 __pycache__
 
+# Model cache (local HuggingFace/PyTorch cache)
+.cache/
+models/
+*.onnx
+*.safetensors
+*.bin
+*.pt
+*.pth
+
 # audio
 *.wav
 *.mp3

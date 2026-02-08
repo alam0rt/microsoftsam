@@ -74,6 +74,10 @@ stt:
 # Configure where HuggingFace and PyTorch models are downloaded/cached
 # Useful for systems with limited home directory space or shared model caches
 models:
+  # Use .cache/ in the repo (gitignored) for local development:
+  # hf_home: ".cache/huggingface"
+  
+  # Or use a shared cache directory:
   # hf_home: "/data/models/huggingface"     # HF_HOME - main HuggingFace directory
   # hf_hub_cache: "/data/models/hf/hub"     # HF_HUB_CACHE - downloaded model files
   # transformers_cache: "/data/models/transformers"  # TRANSFORMERS_CACHE - legacy

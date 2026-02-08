@@ -3,6 +3,7 @@
 Supports loading configuration from YAML files with environment variable expansion.
 """
 
+import logging
 import os
 import re
 from dataclasses import dataclass, field
@@ -10,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 
 def _expand_env_vars(value: Any) -> Any:
@@ -373,9 +376,9 @@ def load_soul_config(
             ]
             if audio_files:
                 ref_audio_path = audio_files[0]
-                print(f"[Soul] Using audio file: {ref_audio_path.name}")
+                logger.info(f"Soul using audio: {ref_audio_path.name}")
             else:
-                print(f"[Soul] Warning: No audio files found in {ref_audio_path}")
+                logger.warning(f"No audio files found in {ref_audio_path}")
         
         voice_data["ref_audio"] = str(ref_audio_path)
 
@@ -453,7 +456,7 @@ def load_config(path: str | Path | None = None) -> BotConfig:
         souls_dir = path.parent / "souls"
         try:
             soul_config = load_soul_config(soul_name, souls_dir)
-            print(f"[Config] Loaded soul: {soul_config.name}")
+            logger.info(f"Loaded soul: {soul_config.name}", extra={"soul": soul_name, "description": soul_config.description})
 
             # Soul voice settings override main TTS config if present
             if soul_config.voice.ref_audio != "reference.wav":
@@ -471,7 +474,7 @@ def load_config(path: str | Path | None = None) -> BotConfig:
                 if key not in llm_data:
                     llm_data[key] = value
         except FileNotFoundError as e:
-            print(f"[Config] Warning: {e}")
+            logger.warning(f"Soul not found: {e}")
 
     return BotConfig(
         llm=LLMConfig(**{k: v for k, v in llm_data.items() if v is not None}),
