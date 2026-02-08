@@ -157,17 +157,28 @@ def split_into_sentences(text: str, max_chars: int = 120) -> List[str]:
 
 
 def _pad_tts_text(text: str, min_chars: int = 80, min_words: int = 12) -> str:
-    """Pad text to avoid very short TTS inputs that can crash the vocoder."""
+    """Pad text to avoid very short TTS inputs that can crash the vocoder.
+    
+    Uses ellipses and 'hmm' sounds as padding - these generate natural pauses
+    without producing transcribable words that would cause feedback loops.
+    """
     cleaned = " ".join(text.split())
     if not cleaned:
         return ""
 
-    filler = (
-        "Let me think for a second and give you a clear answer."
-    )
+    # Use non-transcribable padding that generates silence/pauses
+    # Ellipses create natural pauses, 'hmm' generates brief filler sounds
+    fillers = [
+        "...",
+        "... ...", 
+        "hmm...",
+        "... ... ...",
+    ]
+    filler_idx = 0
 
     while len(cleaned) < min_chars or len(cleaned.split()) < min_words:
-        cleaned = f"{cleaned} {filler}"
+        cleaned = f"{cleaned} {fillers[filler_idx % len(fillers)]}"
+        filler_idx += 1
 
     return cleaned
 
@@ -1000,12 +1011,14 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         # When bot speaks, users' microphones pick up the audio and send it back
         # This causes the bot to transcribe its own TTS output as user speech
         if self._speaking.is_set():
-            # Barge-in detection: if user speaks loudly while bot is speaking,
+            # Barge-in detection: if user speaks VERY loudly while bot is speaking,
             # trigger interruption via TurnController (sets is_cancelled flag)
-            # The TTS generation loop checks is_cancelled() and stops gracefully
+            # Use 3x threshold to avoid false positives from feedback
             rms = pcm_rms(sound_chunk.pcm)
-            if self.turn_controller and rms > self.asr_threshold * 1.5:
-                self.turn_controller.request_barge_in()  # Sets is_cancelled flag
+            barge_in_threshold = self.asr_threshold * 3  # Much higher threshold for barge-in
+            if self.turn_controller and rms > barge_in_threshold:
+                if self.turn_controller.request_barge_in():
+                    logger.info(f"Barge-in triggered by {user_name} (RMS={rms} > {barge_in_threshold})")
             return  # Don't buffer audio while speaking
 
         rms = pcm_rms(sound_chunk.pcm)
@@ -1364,10 +1377,26 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             if pipeline_start:
                 pipeline_total = time.time() - pipeline_start
                 logger.info(f"TTS complete: {tts_total*1000:.0f}ms synthesis, {audio_duration_ms:.0f}ms audio, pipeline total: {pipeline_total*1000:.0f}ms")
+            
+            # Wait for actual audio playback to complete
+            # Mumble sound_output.add_sound() is non-blocking - audio plays in background
+            # We must wait for playback to finish to prevent feedback loops
+            if audio_duration_ms > 0:
+                # Wait for audio to play out (with small buffer for network latency)
+                playback_wait = (audio_duration_ms / 1000) + 0.5
+                logger.debug(f"Waiting {playback_wait:.1f}s for audio playback to complete")
+                
+                # Check for barge-in during playback wait
+                wait_start = time.time()
+                while (time.time() - wait_start) < playback_wait:
+                    if self.turn_controller and self.turn_controller.is_cancelled():
+                        logger.info(f"Playback wait cancelled by barge-in after {(time.time()-wait_start)*1000:.0f}ms")
+                        break
+                    time.sleep(0.1)  # Check every 100ms
+                    
         finally:
-            # Small delay after speaking before accepting audio
-            # This prevents picking up the tail-end of our TTS output
-            time.sleep(0.3)
+            # Additional delay after playback to prevent picking up tail-end audio
+            time.sleep(0.5)
 
             # Clear any audio that accumulated during TTS playback
             for user_id in list(self.audio_buffers.keys()):
