@@ -1314,12 +1314,20 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                         result = f"Error: Tool '{tool_call.name}' not available"
 
                     # Add tool result to messages
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "name": tool_call.name,
-                        "content": result,
-                    })
+                    # Use the LLM's tool formatter to format the result correctly
+                    if hasattr(self.llm, 'tool_formatter'):
+                        tool_msg = self.llm.tool_formatter.format_tool_result(
+                            tool_call.id, tool_call.name, result
+                        )
+                        messages.append(tool_msg)
+                    else:
+                        # Fallback to OpenAI format
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "name": tool_call.name,
+                            "content": result,
+                        })
 
                 # Continue loop to get LLM's response to tool results
                 continue

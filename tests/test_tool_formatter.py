@@ -218,8 +218,10 @@ class TestLFM25ToolFormatter:
             result='[{"title": "Result 1", "url": "http://example.com"}]'
         )
 
-        assert result["role"] == "tool"
+        # LFM2.5 via OpenRouter uses 'user' role with context to ensure proper handling
+        assert result["role"] == "user"
         assert "Result 1" in result["content"]
+        assert "web_search" in result["content"]
 
     def test_strip_tool_calls(self):
         """Test stripping tool call markup from response."""

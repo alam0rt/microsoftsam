@@ -236,11 +236,14 @@ Always use the tool when the user asks to switch personality/soul or search for 
         return result
     
     def format_tool_result(self, tool_call_id: str, tool_name: str, result: str) -> dict:
-        """Format tool result as LFM2.5 tool message."""
-        # LFM2.5 expects tool results as JSON in the content
+        """Format tool result for LFM2.5.
+        
+        OpenRouter may not support 'tool' role properly for LFM2.5,
+        so we format the result as a user message with clear context.
+        """
         return {
-            "role": "tool",
-            "content": result,  # Already JSON string from tool execution
+            "role": "user",
+            "content": f"[Tool Result from {tool_name}]: {result}\n\nPlease summarize the above results for the user in a conversational way.",
         }
     
     def strip_tool_calls(self, response_text: str) -> str:
