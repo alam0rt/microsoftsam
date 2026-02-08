@@ -1,5 +1,7 @@
 [tool.uv]
 cache-dir = ".cache"
+# Use find-links for piper-phonemize which has wheels on a separate index
+find-links = ["https://k2-fsa.github.io/icefall/piper_phonemize.html"]
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
@@ -94,10 +96,6 @@ package-dir = {"pymumble_py3" = "vendor/botamusique/pymumble_py3"}
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-v --cov=mumble_voice_bot --cov-report=term-missing"
-
-[tool.uv]
-# Use find-links for piper-phonemize which has wheels on a separate index
-find-links = ["https://k2-fsa.github.io/icefall/piper_phonemize.html"]
 
 [dependency-groups]
 dev = [
