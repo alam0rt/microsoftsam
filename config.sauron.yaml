@@ -21,7 +21,7 @@ mumble:
   user: "Adjutant"
 
 stt:
-  provider: "nemotron"
+  provider: "nemotron_nemo"
   # Nemotron settings
   nemotron_model: "nvidia/nemotron-speech-streaming-en-0.6b"
   nemotron_chunk_ms: 160
