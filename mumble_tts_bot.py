@@ -44,6 +44,11 @@ from pymumble_py3.constants import PYMUMBLE_CLBK_SOUNDRECEIVED
 from scipy import signal
 from zipvoice.luxvoice import LuxTTS
 
+# Import logging first
+from mumble_voice_bot.logging_config import get_logger, setup_logging
+
+logger = get_logger(__name__)
+
 # Import LLM components
 try:
     from mumble_voice_bot.config import load_config
@@ -51,7 +56,7 @@ try:
     LLM_AVAILABLE = True
 except ImportError as e:
     LLM_AVAILABLE = False
-    print(f"[Warning] LLM modules not available: {e}")
+    logger.warning(f"LLM modules not available: {e}")
 
 # Import Wyoming STT provider
 try:
@@ -59,7 +64,7 @@ try:
     WYOMING_AVAILABLE = True
 except ImportError:
     WYOMING_AVAILABLE = False
-    print("[Warning] Wyoming STT not available. Install with: pip install wyoming")
+    logger.warning("Wyoming STT not available. Install with: pip install wyoming")
 
 # Import streaming ASR providers
 try:
@@ -85,7 +90,7 @@ try:
     LATENCY_TRACKING_AVAILABLE = True
 except ImportError as e:
     LATENCY_TRACKING_AVAILABLE = False
-    print(f"[Warning] Latency tracking not available: {e}")
+    logger.warning(f"Latency tracking not available: {e}")
 
 # Import event system
 try:
@@ -94,7 +99,7 @@ try:
     EVENT_SYSTEM_AVAILABLE = True
 except ImportError as e:
     EVENT_SYSTEM_AVAILABLE = False
-    print(f"[Warning] Event system not available: {e}")
+    logger.warning(f"Event system not available: {e}")
 
 
 # =============================================================================
@@ -1104,7 +1109,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             audio_16k = np.clip(audio_16k, -1.0, 1.0).astype(np.float32)
 
         # Transcribe
-        print(f"[ASR] Transcribing {buffer_duration:.1f}s from {user_name}...")
+        logger.debug(f"ASR transcribing {buffer_duration:.1f}s", extra={"user": user_name, "duration_ms": buffer_duration * 1000})
         start_time = time.time()
 
         # Mark ASR start in tracker
@@ -1153,7 +1158,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 self._maybe_respond(user_id, user_name, tracker=tracker)
                 return
 
-            print(f"[ASR] {user_name}: \"{text}\" ({transcribe_time:.2f}s)")
+            logger.asr(user_name, text, buffer_duration * 1000, transcribe_time * 1000)
 
             # Accumulate text
             current_time = time.time()
@@ -1191,7 +1196,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 if tracker:
                     tracker.llm_start()
 
-                print(f"[LLM] Generating response to: \"{text}\"")
+                logger.debug(f'LLM generating response to: "{text[:100]}"')
                 llm_start = time.time()
 
                 try:
@@ -1204,26 +1209,26 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
                     # Check for staleness - if user said something new, abort
                     if user_id in self.pending_text:
-                        print(f"[Pipeline] Aborting - user spoke again during LLM ({llm_time:.2f}s)")
+                        logger.info("Pipeline abort: user spoke again", extra={"latency_ms": llm_time * 1000})
                         return
 
                     # Check if cancelled by barge-in
                     if self.turn_controller and self.turn_controller.is_cancelled():
-                        print("[Pipeline] Aborting - cancelled by barge-in")
+                        logger.info("Pipeline abort: barge-in")
                         return
 
                     # Check total latency - if too slow, warn
                     total_latency = time.time() - speech_end_time
                     if total_latency > 3.0:
-                        print(f"[Pipeline] Warning: {total_latency:.1f}s since user stopped speaking")
+                        logger.warning(f"High latency: {total_latency:.1f}s since user stopped", extra={"latency_ms": total_latency * 1000})
 
-                    print(f"[LLM] Response ({llm_time:.2f}s): \"{response}\"")
+                    logger.llm(len(text), len(response), llm_time * 1000)
 
                     # Queue TTS with timing metadata and tracker
                     self._tts_queue.put((response, self.voice_prompt, pipeline_start, user_id, tracker))
 
                 except Exception as e:
-                    print(f"[LLM] Error: {e}")
+                    logger.error(f"LLM error: {e}", exc_info=True)
 
     # =========================================================================
     # TTS
@@ -1231,7 +1236,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
     def _tts_worker(self):
         """Background worker for TTS."""
-        print("[TTS] Worker started")
+        logger.info("TTS worker started")
         while not self._shutdown.is_set():
             try:
                 item = self._tts_queue.get(timeout=0.5)
@@ -1536,6 +1541,15 @@ def main():
     parser.add_argument('--config', default=None,
                         help='Path to config.yaml')
 
+    # Logging settings
+    parser.add_argument('--log-level', default='INFO',
+                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+                        help='Log level')
+    parser.add_argument('--log-json', action='store_true',
+                        help='Output logs in JSON format')
+    parser.add_argument('--log-file', default=None,
+                        help='Log file path (JSON format)')
+
     # Mumble settings
     parser.add_argument('--host', default=None, help='Mumble server')
     parser.add_argument('--port', type=int, default=None, help='Mumble port')
@@ -1584,24 +1598,31 @@ def main():
 
     args = parser.parse_args()
 
+    # Setup logging first
+    setup_logging(
+        level=args.log_level,
+        json_output=args.log_json,
+        log_file=args.log_file,
+    )
+
     # Load config file if specified
     config = None
     if args.config:
         try:
             config = load_config(args.config)
-            print(f"[Config] Loaded from {args.config}")
+            logger.info(f"Config loaded from {args.config}")
         except Exception as e:
-            print(f"[Config] Error loading {args.config}: {e}")
+            logger.error(f"Error loading {args.config}: {e}")
 
     # Apply model storage paths early, before loading any models
     # CLI --hf-home overrides config
     if args.hf_home:
         os.environ["HF_HOME"] = args.hf_home
-        print(f"[Models] HF_HOME={args.hf_home}")
+        logger.info(f"HF_HOME={args.hf_home}")
     elif config and config.models:
         applied = config.models.apply_environment()
         if applied:
-            print(f"[Models] Applied environment: {', '.join(f'{k}={v}' for k, v in applied.items())}")
+            logger.info(f"Models environment: {', '.join(f'{k}={v}' for k, v in applied.items())}")
 
     # Merge config with CLI args (CLI takes precedence)
     # Mumble settings

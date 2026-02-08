@@ -7,6 +7,7 @@ from mumble_voice_bot.interfaces.tts import TTSProvider, TTSResult, TTSVoice
 
 # Latency optimization components
 from mumble_voice_bot.latency import LatencyLogger, LatencyTracker, TurnLatency
+from mumble_voice_bot.logging_config import BotLogger, get_logger, setup_logging
 from mumble_voice_bot.phrase_chunker import PhraseChunker, SentenceChunker
 from mumble_voice_bot.pipeline import PipelineConfig, VoicePipeline
 from mumble_voice_bot.providers.openai_llm import OpenAIChatLLM
@@ -47,4 +48,8 @@ __all__ = [
     "StreamingTranscriptBuffer",
     "PhraseChunker",
     "SentenceChunker",
+    # Logging
+    "setup_logging",
+    "get_logger",
+    "BotLogger",
 ]
