@@ -13,7 +13,7 @@ llm:
 
 tts:
   num_steps: 3  # Reduced from 4 for speed
-  device: "cpu"  # Use CPU to avoid GPU contention with ASR
+  device: "cuda"  # GPU - CPU is too slow
 
 mumble:
   host: "murmur.middleearth.samlockart.com"
