@@ -360,7 +360,24 @@ def load_soul_config(
         ref_audio = voice_data["ref_audio"]
         # Make relative paths relative to the soul directory
         if not Path(ref_audio).is_absolute():
-            voice_data["ref_audio"] = str(soul_path / ref_audio)
+            ref_audio_path = soul_path / ref_audio
+        else:
+            ref_audio_path = Path(ref_audio)
+        
+        # If ref_audio points to a directory, find the first audio file in it
+        if ref_audio_path.is_dir():
+            audio_extensions = {".wav", ".mp3", ".flac", ".ogg"}
+            audio_files = [
+                f for f in sorted(ref_audio_path.iterdir())
+                if f.is_file() and f.suffix.lower() in audio_extensions
+            ]
+            if audio_files:
+                ref_audio_path = audio_files[0]
+                print(f"[Soul] Using audio file: {ref_audio_path.name}")
+            else:
+                print(f"[Soul] Warning: No audio files found in {ref_audio_path}")
+        
+        voice_data["ref_audio"] = str(ref_audio_path)
 
     voice = TTSConfig(**{k: v for k, v in voice_data.items() if v is not None})
 

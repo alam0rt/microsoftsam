@@ -1,0 +1,31 @@
+# Raf Soul Configuration
+
+# Metadata
+name: "Raf"
+description: "A Magic: The Gathering enthusiast who works with wood and has a dog named Barry"
+author: "sam"
+version: "1.0.0"
+
+# Voice settings (TTS)
+voice:
+  # Reference audio for voice cloning (relative to this soul directory)
+  ref_audio: "audio/"
+  
+  # How many seconds of reference audio to use (max)
+  ref_duration: 5.0
+  
+  # Inference steps: lower = faster, higher = better quality
+  num_steps: 4
+  
+  # Playback speed multiplier
+  speed: 1.0
+
+# Custom model weights (optional)
+weights:
+  tts_model: null
+  voice_encoder: null
+
+# LLM behavior overrides (optional)
+llm:
+  temperature: 0.7
+  max_tokens: 150
