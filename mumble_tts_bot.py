@@ -245,15 +245,18 @@ class StreamingLuxTTS(LuxTTS):
             print(f"[TTS-STREAM] Processing sentence {i+1}/{len(sentences)}: '{sentence[:30]}...'")
             sentence = sentence.strip()
             if not sentence:
+                print(f"[TTS-STREAM] Sentence {i+1} empty after strip")
                 continue
             # Pad very short sentences to avoid vocoder kernel size issues
             # The vocoder needs at least 7 frames, which requires ~20+ chars
-            sentence = _pad_tts_text(sentence)
-            if not sentence:
+            padded = _pad_tts_text(sentence)
+            print(f"[TTS-STREAM] Sentence {i+1} after padding: '{padded[:40]}...' ({len(padded)} chars)")
+            if not padded:
                 print(f"[TTS-STREAM] Sentence {i+1} empty after padding, skipping")
                 continue
+            print(f"[TTS-STREAM] Sentence {i+1} calling _generate_speech_safe...")
             wav = self._generate_speech_safe(
-                sentence,
+                padded,
                 encode_dict,
                 num_steps=num_steps,
                 guidance_scale=guidance_scale,
@@ -261,6 +264,7 @@ class StreamingLuxTTS(LuxTTS):
                 speed=speed,
                 return_smooth=return_smooth,
             )
+            print(f"[TTS-STREAM] Sentence {i+1} _generate_speech_safe returned")
             if wav is not None:
                 print(f"[TTS-STREAM] Yielding sentence {i+1}")
                 yield wav
