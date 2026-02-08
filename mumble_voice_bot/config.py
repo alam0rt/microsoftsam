@@ -366,14 +366,15 @@ def load_soul_config(
 
     # Build fallbacks config
     fallbacks_data = config_data.get("fallbacks", {})
+    default_fallbacks = SoulFallbacks()
     fallbacks = SoulFallbacks(
-        greetings=fallbacks_data.get("greetings", SoulFallbacks.greetings.default),
-        farewells=fallbacks_data.get("farewells", SoulFallbacks.farewells.default),
+        greetings=fallbacks_data.get("greetings", default_fallbacks.greetings),
+        farewells=fallbacks_data.get("farewells", default_fallbacks.farewells),
         acknowledgments=fallbacks_data.get(
-            "acknowledgments", SoulFallbacks.acknowledgments.default
+            "acknowledgments", default_fallbacks.acknowledgments
         ),
         idle_chatter=fallbacks_data.get("idle_chatter", []),
-        errors=fallbacks_data.get("errors", SoulFallbacks.errors.default),
+        errors=fallbacks_data.get("errors", default_fallbacks.errors),
     )
 
     return SoulConfig(
@@ -426,6 +427,34 @@ def load_config(path: str | Path | None = None) -> BotConfig:
     mumble_data = config_data.get("mumble", {})
     bot_data = config_data.get("bot", {})
     models_data = config_data.get("models", {})
+    soul_name = config_data.get("soul")
+
+    # Load soul configuration if specified
+    soul_config = None
+    if soul_name:
+        # Determine souls directory relative to config file
+        souls_dir = path.parent / "souls"
+        try:
+            soul_config = load_soul_config(soul_name, souls_dir)
+            print(f"[Config] Loaded soul: {soul_config.name}")
+
+            # Soul voice settings override main TTS config if present
+            if soul_config.voice.ref_audio != "reference.wav":
+                if "ref_audio" not in tts_data:
+                    tts_data["ref_audio"] = soul_config.voice.ref_audio
+            # Apply other soul voice overrides
+            for attr in ["ref_duration", "num_steps", "speed", "device"]:
+                soul_val = getattr(soul_config.voice, attr)
+                default_val = getattr(TTSConfig(), attr)
+                if soul_val != default_val and attr not in tts_data:
+                    tts_data[attr] = soul_val
+
+            # Soul LLM overrides apply to main config
+            for key, value in soul_config.llm.items():
+                if key not in llm_data:
+                    llm_data[key] = value
+        except FileNotFoundError as e:
+            print(f"[Config] Warning: {e}")
 
     return BotConfig(
         llm=LLMConfig(**{k: v for k, v in llm_data.items() if v is not None}),
@@ -434,6 +463,8 @@ def load_config(path: str | Path | None = None) -> BotConfig:
         mumble=MumbleConfig(**{k: v for k, v in mumble_data.items() if v is not None}),
         bot=PipelineBotConfig(**{k: v for k, v in bot_data.items() if v is not None}),
         models=ModelsConfig(**{k: v for k, v in models_data.items() if v is not None}),
+        soul=soul_name,
+        soul_config=soul_config,
     )
 
 

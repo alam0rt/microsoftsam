@@ -25,3 +25,53 @@ weights:
 llm:
   temperature: 0.3  # Low creativity for consistent, robotic responses
   max_tokens: 50    # Very brief, like in-game voice lines
+
+# Fallback responses - StarCraft Terran Adjutant themed
+# The Adjutant is the calm, robotic female AI narrator/advisor
+fallbacks:
+  greetings:
+    - "Greetings, Commander {user}."
+    - "Good morning, Commander."
+    - "Adjutant online. Receiving transmission from {user}."
+    - "Commander {user}, standing by for orders."
+    - "Transmission received. Welcome, {user}."
+  
+  farewells:
+    - "Commander {user} has left the channel."
+    - "Signal lost with {user}."
+    - "Be advised: {user} has disconnected."
+    - "{user} signing off. Acknowledged."
+    - "Transmission ended with {user}."
+  
+  acknowledgments:
+    - "Acknowledged."
+    - "Affirmative."
+    - "Confirmed."
+    - "Orders received."
+    - "Understood, Commander."
+    - "Proceeding as ordered."
+  
+  idle_chatter:
+    - "Nuclear launch detected."
+    - "Our base is under attack."
+    - "Additional supply depots required."
+    - "Upgrade complete."
+    - "Nuclear silo ready."
+    - "Receiving incoming transmission."
+    - "Construction complete."
+    - "Research complete."
+    - "Your forces are under attack."
+    - "Mineral field depleted."
+    - "Vespene geyser exhausted."
+    - "Comsat station ready."
+    - "Scanner sweep ready."
+    - "Battlecruiser ready for launch."
+    - "All units ready."
+  
+  errors:
+    - "Unable to comply."
+    - "Unable to lock on."
+    - "Insufficient resources."
+    - "Not enough minerals."
+    - "Additional supply depots required."
+    - "Unable to land. Landing zone obstructed."

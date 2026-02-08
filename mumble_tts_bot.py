@@ -421,6 +421,8 @@ class MumbleVoiceBot:
         nemotron_device: str = "cuda",
         # Staleness configuration
         max_response_staleness: float = 5.0,
+        # Soul configuration
+        soul_config=None,  # SoulConfig object with themed fallbacks
     ):
         self.host = host
         self.user = user
@@ -430,6 +432,7 @@ class MumbleVoiceBot:
         self.device = device
         self.num_steps = num_steps
         self.voices_dir = voices_dir
+        self.soul_config = soul_config  # Soul-specific themed responses
 
         # VAD settings
         self.asr_threshold = asr_threshold
@@ -1424,9 +1427,23 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
     def _greet_user(self, user_name: str, user_id: int):
         """Generate a greeting for a user who joined the channel."""
+        # Get themed fallback greetings from soul config
+        if self.soul_config and self.soul_config.fallbacks:
+            fallback_greetings = [
+                g.format(user=user_name)
+                for g in self.soul_config.fallbacks.greetings
+            ]
+        else:
+            fallback_greetings = [
+                f"Hey {user_name}!",
+                f"Oh hey, {user_name}.",
+                f"Yo {user_name}, what's up?",
+                f"Hey! {user_name}'s here.",
+            ]
+
         if not self.llm:
             # Simple fallback
-            self.speak(f"Hey {user_name}!")
+            self.speak(random.choice(fallback_greetings))
             return
 
         # Get time-appropriate greeting via LLM
@@ -1456,14 +1473,8 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                     self.speak(response)
             except Exception as e:
                 print(f"[Greet] Error generating greeting: {e}")
-                # Fallback
-                greetings = [
-                    f"Hey {user_name}!",
-                    f"Oh hey, {user_name}.",
-                    f"Yo {user_name}, what's up?",
-                    f"Hey! {user_name}'s here.",
-                ]
-                self.speak(random.choice(greetings))
+                # Use themed fallback
+                self.speak(random.choice(fallback_greetings))
 
         # Run in background so we don't block
         self._asr_executor.submit(generate_greeting)
@@ -1685,6 +1696,7 @@ def main():
         nemotron_chunk_ms=nemotron_chunk_ms,
         nemotron_device=nemotron_device,
         max_response_staleness=max_response_staleness,
+        soul_config=config.soul_config if config else None,
     )
 
     bot.start()

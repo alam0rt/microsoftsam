@@ -44,3 +44,34 @@ llm:
   
   # Optional: Override system prompt entirely
   # system_prompt: "Custom system prompt here"
+
+# Fallback responses (used when LLM is unavailable)
+# These should be themed to match the character's personality
+# Use {user} placeholder for the username
+fallbacks:
+  # Greetings when users join the channel
+  greetings:
+    - "Hey {user}!"
+    - "Oh hey, {user}."
+    - "Hey! {user}'s here."
+  
+  # Farewells when users leave
+  farewells:
+    - "See ya, {user}."
+    - "Later, {user}!"
+    - "Bye {user}."
+  
+  # Brief acknowledgments
+  acknowledgments:
+    - "Got it."
+    - "Okay."
+    - "Sure thing."
+  
+  # Random idle chatter (empty = no idle chatter)
+  idle_chatter: []
+  
+  # Error/failure responses
+  errors:
+    - "Hmm, something went wrong."
+    - "Uh, I'm having trouble with that."
+    - "Sorry, I can't do that right now."

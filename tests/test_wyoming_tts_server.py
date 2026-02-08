@@ -7,7 +7,6 @@ from wyoming.event import Event
 from wyoming.info import Describe
 from wyoming.tts import Synthesize
 
-
 # Skip all tests in this module - they need proper reader/writer mocks
 # which require significant refactoring
 pytestmark = pytest.mark.skip(reason="Requires wyoming server reader/writer mocks")

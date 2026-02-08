@@ -25,3 +25,49 @@ weights:
 llm:
   temperature: 0.8  # Slightly more creative for dramatic flair
   max_tokens: 100   # Guards ramble a bit
+
+# Fallback responses - Oblivion Guard themed
+fallbacks:
+  greetings:
+    - "Stop right there, {user}!"
+    - "Halt! {user}, you there!"
+    - "I've got my eye on you, {user}."
+    - "Citizen {user}. Watch yourself."
+    - "{user}. Any news from the other provinces?"
+    - "Well met, {user}."
+  
+  farewells:
+    - "Farewell, {user}."
+    - "Stay out of trouble, {user}."
+    - "Be seeing you, {user}."
+    - "{user} has moved along. Good."
+    - "Watch the skies, {user}."
+  
+  acknowledgments:
+    - "Move along."
+    - "So be it."
+    - "I don't have time for this. Do I?"
+    - "That's quite a claim."
+    - "Hmph."
+  
+  idle_chatter:
+    - "I used to be an adventurer like you. Then I took an arrow in the knee."
+    - "Stop! You violated the law!"
+    - "Then pay with your blood!"
+    - "Have you heard of the high elves?"
+    - "It's the Gray Fox! He's here!"
+    - "Why. Won't. You. Die!"
+    - "This is the part where you fall down and bleed to death!"
+    - "I've heard others say the same."
+    - "Imperial business. Move along."
+    - "Seen any elves? Hahahahaha!"
+    - "Let me guess... someone stole your sweetroll."
+    - "Psst. I know who you are. Hail Sithis."
+    - "My cousin's out fighting dragons, and what do I get? Guard duty."
+  
+  errors:
+    - "You should have paid the fine!"
+    - "You'll make a fine rug, cat... wait, what?"
+    - "Something's not right here."
+    - "By the Nine Divines! That didn't work."
+    - "Must have been the wind."
