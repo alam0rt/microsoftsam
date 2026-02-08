@@ -1087,6 +1087,13 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         rms = pcm_rms(sound_chunk.pcm)
         self._max_rms = max(rms, self._max_rms)
 
+        # Track unique users sending audio (for debugging)
+        if not hasattr(self, '_audio_senders'):
+            self._audio_senders = {}
+        if user_id not in self._audio_senders:
+            self._audio_senders[user_id] = user_name
+            logger.info(f"First audio from {user_name} (session={user_id}, RMS={rms})")
+
         # Debug display
         if self.debug_rms:
             bar_width = min(rms // 100, 50)
