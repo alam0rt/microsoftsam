@@ -120,11 +120,13 @@ except ImportError as e:
 try:
     from mumble_voice_bot.tools import ToolRegistry
     from mumble_voice_bot.tools.web_search import WebSearchTool
+    from mumble_voice_bot.tools.souls import SoulsTool
     TOOLS_AVAILABLE = True
 except ImportError as e:
     TOOLS_AVAILABLE = False
     ToolRegistry = None
     WebSearchTool = None
+    SoulsTool = None
     logger.warning(f"Tool system not available: {e}")
 
 
@@ -465,6 +467,7 @@ class MumbleVoiceBot:
         self.num_steps = num_steps
         self.voices_dir = voices_dir
         self.soul_config = soul_config  # Soul-specific themed responses
+        self._current_soul_name = None  # Track active soul name for tool queries
 
         # VAD settings
         self.asr_threshold = asr_threshold
@@ -929,7 +932,100 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         # Register web search tool
         self.tools.register(WebSearchTool(max_results=5, timeout=10.0))
 
+        # Register souls tool for personality management
+        souls_tool = SoulsTool(
+            souls_dir=os.path.join(_THIS_DIR, "souls"),
+            switch_callback=self._switch_soul,
+            get_current_callback=self._get_current_soul,
+        )
+        self.tools.register(souls_tool)
+
         print(f"[Tools] Initialized with {len(self.tools)} tool(s): {self.tools.tool_names}")
+
+    # =========================================================================
+    # Soul Management
+    # =========================================================================
+
+    def _get_current_soul(self) -> str | None:
+        """Get the name of the currently active soul."""
+        if self.soul_config:
+            return self._current_soul_name
+        return None
+
+    async def _switch_soul(self, soul_name: str) -> str:
+        """Switch to a different soul/personality.
+
+        This updates:
+        - The LLM system prompt
+        - The TTS voice reference
+        - The soul config for fallbacks
+
+        Args:
+            soul_name: Name of the soul directory to switch to.
+
+        Returns:
+            Success or error message.
+        """
+        from mumble_voice_bot.config import load_soul_config
+
+        souls_dir = os.path.join(_THIS_DIR, "souls")
+        soul_path = os.path.join(souls_dir, soul_name)
+
+        if not os.path.exists(soul_path):
+            return f"Soul '{soul_name}' not found."
+
+        try:
+            # Load the new soul config
+            new_soul = load_soul_config(soul_name, souls_dir)
+            logger.info(f"Switching to soul: {new_soul.name}")
+
+            # Update TTS voice if different
+            if new_soul.voice.ref_audio and new_soul.voice.ref_audio != "reference.wav":
+                ref_audio = new_soul.voice.ref_audio
+                # Make relative paths absolute to soul directory
+                if not os.path.isabs(ref_audio):
+                    ref_audio = os.path.join(soul_path, ref_audio)
+
+                # Handle directory - find first audio file
+                if os.path.isdir(ref_audio):
+                    audio_extensions = {".wav", ".mp3", ".flac", ".ogg"}
+                    for f in sorted(os.listdir(ref_audio)):
+                        if os.path.splitext(f)[1].lower() in audio_extensions:
+                            ref_audio = os.path.join(ref_audio, f)
+                            break
+
+                if os.path.exists(ref_audio):
+                    print(f"[Soul] Loading voice: {ref_audio}")
+                    self._load_reference_voice(ref_audio)
+
+            # Update LLM system prompt
+            if self.llm:
+                # Load personality file
+                personality_path = os.path.join(soul_path, "personality.md")
+                if os.path.exists(personality_path):
+                    new_prompt = self._load_system_prompt(personality=personality_path)
+                    self.llm.system_prompt = new_prompt
+                    print(f"[Soul] Updated LLM personality")
+
+                # Apply LLM overrides from soul config
+                if new_soul.llm:
+                    if "temperature" in new_soul.llm:
+                        self.llm.temperature = new_soul.llm["temperature"]
+                    if "max_tokens" in new_soul.llm:
+                        self.llm.max_tokens = new_soul.llm["max_tokens"]
+
+            # Update soul config and name
+            self.soul_config = new_soul
+            self._current_soul_name = soul_name
+
+            # Clear conversation history for fresh start
+            self.channel_history = []
+
+            return f"Switched to {new_soul.name}. Voice and personality updated."
+
+        except Exception as e:
+            logger.error(f"Failed to switch soul: {e}")
+            return f"Error switching to '{soul_name}': {str(e)}"
 
     # =========================================================================
     # Context & Awareness
