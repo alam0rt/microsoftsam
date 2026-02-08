@@ -57,6 +57,9 @@ class LLMConfig:
         timeout: Request timeout in seconds.
         max_tokens: Maximum tokens in response (optional).
         temperature: Sampling temperature (optional).
+        top_p: Nucleus sampling parameter (optional).
+        top_k: Top-k sampling parameter (optional).
+        repetition_penalty: Penalty for repetition (optional).
     """
     endpoint: str = "http://localhost:11434/v1/chat/completions"
     model: str = "llama3.2:3b"
@@ -71,6 +74,9 @@ class LLMConfig:
     timeout: float = 30.0
     max_tokens: int | None = None
     temperature: float | None = None
+    top_p: float | None = None
+    top_k: int | None = None
+    repetition_penalty: float | None = None
 
 
 @dataclass

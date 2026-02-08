@@ -8,10 +8,14 @@ llm:
   # api_key loaded from OPENROUTER_API_KEY env var
   timeout: 5.0
   max_tokens: 256  # Keep responses short for TTS
-  temperature: 0.7
+  # LFM2.5 recommended parameters from HuggingFace
+  temperature: 0.1
+  top_p: 0.1
+  top_k: 50
+  repetition_penalty: 1.05
 
 tts:
-  num_steps: 3  # Reduced from 4 for speed
+  num_steps: 4
   device: "cuda"  # GPU - CPU is too slow
 
 mumble:
@@ -34,6 +38,11 @@ bot:
   conversation_timeout: 300
   max_response_staleness: 15.0  # Skip responses older than this (seconds)
   barge_in_enabled: false  # Bot talks over everyone without interruption
+
+# Tools work with LFM2.5 via text-based format (not OpenAI-style API parameter)
+# The bot auto-detects and uses the appropriate format for each model
+tools:
+  enabled: true
 
 # Model storage paths
 models:

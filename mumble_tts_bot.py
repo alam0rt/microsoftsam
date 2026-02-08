@@ -54,6 +54,10 @@ logger = get_logger(__name__)
 try:
     from mumble_voice_bot.config import load_config
     from mumble_voice_bot.providers.openai_llm import OpenAIChatLLM
+    from mumble_voice_bot.interfaces.tool_formatter import (
+        OpenAIToolFormatter,
+        LFM25ToolFormatter,
+    )
     LLM_AVAILABLE = True
 except ImportError as e:
     LLM_AVAILABLE = False
@@ -775,6 +779,24 @@ class MumbleVoiceBot:
             for key, value in voice_prompt.items()
         }
 
+    def _get_tool_formatter(self, model: str):
+        """Select the appropriate tool formatter based on model name.
+        
+        Different LLMs require different tool calling formats:
+        - LFM2.5: Uses <|tool_call_start|>...<|tool_call_end|> special tokens
+        - Most others: Use OpenAI-style `tools` parameter
+        """
+        model_lower = model.lower()
+        
+        # LFM2.5 models use custom format (via system prompt, not API parameter)
+        if 'lfm' in model_lower or 'liquid' in model_lower:
+            print(f"[LLM] Using LFM2.5 tool formatter for model: {model}")
+            return LFM25ToolFormatter()
+        
+        # Default to OpenAI-style tool calling
+        print(f"[LLM] Using OpenAI tool formatter for model: {model}")
+        return OpenAIToolFormatter()
+
     def _init_llm(
         self,
         endpoint: str = None,
@@ -802,6 +824,9 @@ class MumbleVoiceBot:
         final_timeout = 30.0
         final_max_tokens = None
         final_temperature = None
+        final_top_p = None
+        final_top_k = None
+        final_repetition_penalty = None
 
         if config:
             final_endpoint = final_endpoint or config.llm.endpoint
@@ -813,6 +838,9 @@ class MumbleVoiceBot:
             final_timeout = config.llm.timeout or final_timeout
             final_max_tokens = config.llm.max_tokens
             final_temperature = config.llm.temperature
+            final_top_p = config.llm.top_p
+            final_top_k = config.llm.top_k
+            final_repetition_penalty = config.llm.repetition_penalty
             if hasattr(config, 'bot') and config.bot.conversation_timeout:
                 self.conversation_timeout = config.bot.conversation_timeout
 
@@ -826,6 +854,9 @@ class MumbleVoiceBot:
         # Always load system prompt with personality if personality is set
         final_system_prompt = final_system_prompt or self._load_system_prompt(personality=personality)
 
+        # Select appropriate tool formatter based on model
+        tool_formatter = self._get_tool_formatter(final_model)
+
         self.llm = OpenAIChatLLM(
             endpoint=final_endpoint,
             model=final_model,
@@ -834,12 +865,22 @@ class MumbleVoiceBot:
             timeout=final_timeout,
             max_tokens=final_max_tokens,
             temperature=final_temperature,
+            top_p=final_top_p,
+            top_k=final_top_k,
+            repetition_penalty=final_repetition_penalty,
+            tool_formatter=tool_formatter,
         )
         extra_info = []
         if final_max_tokens:
             extra_info.append(f"max_tokens={final_max_tokens}")
         if final_temperature:
             extra_info.append(f"temp={final_temperature}")
+        if final_top_p:
+            extra_info.append(f"top_p={final_top_p}")
+        if final_top_k:
+            extra_info.append(f"top_k={final_top_k}")
+        if final_repetition_penalty:
+            extra_info.append(f"rep_penalty={final_repetition_penalty}")
         extra_str = f" ({', '.join(extra_info)})" if extra_info else ""
         print(f"[LLM] Initialized: {final_model} @ {final_endpoint}{extra_str}")
 

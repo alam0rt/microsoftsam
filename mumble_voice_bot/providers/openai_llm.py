@@ -16,6 +16,11 @@ from typing import AsyncIterator
 import httpx
 
 from mumble_voice_bot.interfaces.llm import LLMProvider, LLMResponse, ToolCall
+from mumble_voice_bot.interfaces.tool_formatter import (
+    ToolFormatter,
+    OpenAIToolFormatter,
+    get_tool_formatter,
+)
 from mumble_voice_bot.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -52,6 +57,9 @@ class OpenAIChatLLM(LLMProvider):
         timeout: float = 30.0,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        repetition_penalty: float | None = None,
     ):
         """Initialize the OpenAI-compatible LLM provider.
 
@@ -65,6 +73,9 @@ class OpenAIChatLLM(LLMProvider):
             timeout: HTTP request timeout in seconds (default: 30).
             max_tokens: Maximum tokens in the response (optional).
             temperature: Sampling temperature (optional).
+            top_p: Nucleus sampling parameter (optional).
+            top_k: Top-k sampling parameter (optional).
+            repetition_penalty: Penalty for repetition (optional).
         """
         self.endpoint = endpoint
         self.model = model
@@ -73,6 +84,18 @@ class OpenAIChatLLM(LLMProvider):
         self.timeout = timeout
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.top_p = top_p
+        self.top_k = top_k
+        self.repetition_penalty = repetition_penalty
+        
+        # Get the appropriate tool formatter for this model
+        self._tool_formatter = get_tool_formatter(model)
+        self._is_openai_tools = isinstance(self._tool_formatter, OpenAIToolFormatter)
+    
+    @property
+    def tool_formatter(self) -> ToolFormatter:
+        """Get the tool formatter for this LLM."""
+        return self._tool_formatter
 
     def _build_headers(self) -> dict:
         """Build HTTP headers for the request."""
@@ -81,15 +104,24 @@ class OpenAIChatLLM(LLMProvider):
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
-    def _build_messages(self, messages: list[dict]) -> list[dict]:
-        """Build the full message list including system prompt."""
+    def _build_messages(self, messages: list[dict], tools: list[dict] | None = None) -> list[dict]:
+        """Build the full message list including system prompt and tool definitions."""
         full_messages = []
+        
+        # Build system prompt, potentially with tool definitions appended
+        system_content = self.system_prompt or ""
+        
+        # For text-based tool formatters, add tool definitions to system prompt
+        if tools and not self._is_openai_tools:
+            formatted = self._tool_formatter.format_tools(tools)
+            if formatted.system_prompt_addition:
+                system_content = system_content + formatted.system_prompt_addition
 
-        # Prepend system prompt if configured
-        if self.system_prompt:
+        # Prepend system prompt if we have any content
+        if system_content:
             full_messages.append({
                 "role": "system",
-                "content": self.system_prompt
+                "content": system_content
             })
 
         full_messages.extend(messages)
@@ -99,7 +131,7 @@ class OpenAIChatLLM(LLMProvider):
         """Build the request body for the API call."""
         body = {
             "model": self.model,
-            "messages": self._build_messages(messages),
+            "messages": self._build_messages(messages, tools),
         }
 
         if self.max_tokens is not None:
@@ -108,11 +140,21 @@ class OpenAIChatLLM(LLMProvider):
         if self.temperature is not None:
             body["temperature"] = self.temperature
 
-        # Add tools if provided
-        if tools:
-            body["tools"] = tools
-            # Let the model decide whether to use tools
-            body["tool_choice"] = "auto"
+        if self.top_p is not None:
+            body["top_p"] = self.top_p
+
+        if self.top_k is not None:
+            body["top_k"] = self.top_k
+
+        if self.repetition_penalty is not None:
+            body["repetition_penalty"] = self.repetition_penalty
+
+        # Add tools as API parameter only for OpenAI-compatible models
+        if tools and self._is_openai_tools:
+            formatted = self._tool_formatter.format_tools(tools)
+            if formatted.tools_parameter:
+                body["tools"] = formatted.tools_parameter
+                body["tool_choice"] = "auto"
 
         return body
 
@@ -163,8 +205,10 @@ class OpenAIChatLLM(LLMProvider):
         content = message.get("content")
         finish_reason = data["choices"][0].get("finish_reason", "stop")
 
-        # Parse tool calls if present
+        # Parse tool calls - either from structured response or from text
         tool_calls = []
+        
+        # First check for OpenAI-style structured tool calls
         if "tool_calls" in message and message["tool_calls"]:
             for tc in message["tool_calls"]:
                 try:
@@ -180,6 +224,14 @@ class OpenAIChatLLM(LLMProvider):
                     ))
                 except (json.JSONDecodeError, KeyError) as e:
                     logger.warning(f"Failed to parse tool call: {e}")
+        
+        # For text-based tool formats (e.g., LFM2.5), parse from content
+        if not tool_calls and content and tools:
+            text_tool_calls = self._tool_formatter.parse_tool_calls(content)
+            if text_tool_calls:
+                tool_calls = text_tool_calls
+                # Strip tool call markup from content for cleaner output
+                content = self._tool_formatter.strip_tool_calls(content)
 
         # Handle models that include <think>...</think> tags (e.g., Qwen3)
         # Strip out thinking content for cleaner TTS output

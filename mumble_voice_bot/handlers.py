@@ -341,7 +341,7 @@ class TextCommandHandler(MumbleEventHandler):
             if response:
                 self._bot.speak(response)
         except Exception as e:
-            logger.error(f"Error generating text response: {e}")
+            logger.error(f"Error generating text response: {e}", exc_info=True)
 
     def _is_message_for_us(self, event: TextMessageEvent) -> bool:
         """Check if a message targets our channel."""
