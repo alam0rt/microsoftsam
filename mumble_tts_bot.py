@@ -1262,6 +1262,14 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             # If this was triggered by silence (not max duration), respond now
             if not is_continuation:
                 self._maybe_respond(user_id, user_name, force=True, tracker=tracker)
+            else:
+                # Continuous transmit: respond after accumulating enough text
+                # This handles users with always-on mic / continuous transmit
+                accumulated_text = self.pending_text.get(user_id, "")
+                word_count = len(accumulated_text.split())
+                if word_count >= 10:  # Respond after ~10 words even during continuous speech
+                    logger.info(f"Continuous transmit: responding after {word_count} words")
+                    self._maybe_respond(user_id, user_name, force=True, tracker=tracker)
 
         except Exception as e:
             print(f"[Error] Processing failed: {e}")
