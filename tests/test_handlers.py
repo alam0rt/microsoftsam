@@ -11,6 +11,7 @@ from mumble_voice_bot.handlers import (
 )
 from mumble_voice_bot.interfaces.events import (
     ConnectedEvent,
+    DisconnectedEvent,
     EventType,
     TextMessageEvent,
     UserLeftEvent,
@@ -330,3 +331,262 @@ class TestConnectionHandler:
         """Test handler name property."""
         handler = ConnectionHandler()
         assert handler.name == "ConnectionHandler"
+
+    @pytest.mark.asyncio
+    async def test_on_connected_logs(self):
+        """Test connected event is handled."""
+        bot = MockBot()
+        handler = ConnectionHandler(bot)
+
+        event = ConnectedEvent()
+        # Should not raise
+        await handler.on_connected(event)
+
+    @pytest.mark.asyncio
+    async def test_on_disconnected_logs(self):
+        """Test disconnected event is handled."""
+        bot = MockBot()
+        handler = ConnectionHandler(bot)
+
+        event = DisconnectedEvent()
+        # Should not raise
+        await handler.on_disconnected(event)
+
+
+class TestPresenceHandlerGreetings:
+    """Test greeting generation in PresenceHandler."""
+
+    @pytest.mark.asyncio
+    async def test_greet_user_with_llm(self):
+        """Test that LLM is used for greeting when available."""
+        bot = MockBot()
+        bot.llm = MagicMock()
+        handler = PresenceHandler(bot, greet_on_join=True)
+
+        # Manually trigger greeting
+        await handler._greet_user("TestUser", 42)
+
+        # Should have called the LLM greeting
+        bot._generate_oneoff_response_sync.assert_called()
+        bot.speak.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_greet_user_fallback_without_llm(self):
+        """Test fallback greeting when LLM is not available."""
+        bot = MockBot()
+        bot.llm = None  # No LLM
+        handler = PresenceHandler(bot, greet_on_join=True)
+
+        await handler._greet_user("TestUser", 42)
+
+        # Should have used fallback greeting
+        bot.speak.assert_called()
+        call_args = bot.speak.call_args[0][0]
+        assert "TestUser" in call_args
+
+    @pytest.mark.asyncio
+    async def test_greet_user_with_custom_generator(self):
+        """Test custom greeting generator is used when provided."""
+        bot = MockBot()
+
+        async def custom_greeting(user_name, time_of_day):
+            return f"Custom hello to {user_name}!"
+
+        handler = PresenceHandler(
+            bot, greet_on_join=True, greeting_generator=custom_greeting
+        )
+
+        await handler._greet_user("TestUser", 42)
+
+        bot.speak.assert_called_with("Custom hello to TestUser!")
+
+    def test_get_time_of_day_morning(self):
+        """Test time of day detection for morning."""
+        from unittest.mock import patch, MagicMock
+
+        mock_datetime = MagicMock()
+        mock_datetime.now.return_value.hour = 9
+        with patch('mumble_voice_bot.handlers.datetime', mock_datetime):
+            time_str = PresenceHandler._get_time_of_day()
+            assert time_str == "morning"
+
+    def test_get_time_of_day_afternoon(self):
+        """Test time of day detection for afternoon."""
+        from unittest.mock import patch, MagicMock
+
+        mock_datetime = MagicMock()
+        mock_datetime.now.return_value.hour = 14
+        with patch('mumble_voice_bot.handlers.datetime', mock_datetime):
+            time_str = PresenceHandler._get_time_of_day()
+            assert time_str == "afternoon"
+
+    def test_get_time_of_day_evening(self):
+        """Test time of day detection for evening."""
+        from unittest.mock import patch, MagicMock
+
+        mock_datetime = MagicMock()
+        mock_datetime.now.return_value.hour = 19
+        with patch('mumble_voice_bot.handlers.datetime', mock_datetime):
+            time_str = PresenceHandler._get_time_of_day()
+            assert time_str == "evening"
+
+    def test_get_time_of_day_late_night(self):
+        """Test time of day detection for late night."""
+        from unittest.mock import patch, MagicMock
+
+        mock_datetime = MagicMock()
+        mock_datetime.now.return_value.hour = 2
+        with patch('mumble_voice_bot.handlers.datetime', mock_datetime):
+            time_str = PresenceHandler._get_time_of_day()
+            assert time_str == "late night"
+
+
+class TestTextCommandHandlerHTMLStripping:
+    """Test HTML stripping in TextCommandHandler."""
+
+    def test_strip_html_removes_tags(self):
+        """Test HTML tag removal."""
+        result = TextCommandHandler._strip_html("<b>bold</b> and <i>italic</i>")
+        assert result == "bold and italic"
+
+    def test_strip_html_handles_links(self):
+        """Test link tag removal."""
+        result = TextCommandHandler._strip_html('<a href="http://example.com">click</a>')
+        assert result == "click"
+
+    def test_strip_html_preserves_text(self):
+        """Test plain text is preserved."""
+        result = TextCommandHandler._strip_html("plain text")
+        assert result == "plain text"
+
+    def test_strip_html_handles_empty(self):
+        """Test empty string handling."""
+        result = TextCommandHandler._strip_html("")
+        assert result == ""
+
+
+class TestTextCommandHandlerMessageRouting:
+    """Test message routing in TextCommandHandler."""
+
+    def test_is_message_for_us_private(self):
+        """Test private messages are always for us."""
+        bot = MockBot()
+        handler = TextCommandHandler(bot)
+
+        event = TextMessageEvent(
+            sender_session_id=2,
+            sender_name="Alice",
+            message="Hello",
+            channel_ids=[],
+            is_private=True,
+            raw={},
+        )
+
+        assert handler._is_message_for_us(event) is True
+
+    def test_is_message_for_us_same_channel(self):
+        """Test messages in our channel are for us."""
+        bot = MockBot()
+        handler = TextCommandHandler(bot)
+
+        event = TextMessageEvent(
+            sender_session_id=2,
+            sender_name="Alice",
+            message="Hello",
+            channel_ids=[100],  # Bot's channel
+            is_private=False,
+            raw={},
+        )
+
+        assert handler._is_message_for_us(event) is True
+
+    def test_is_message_for_us_different_channel(self):
+        """Test messages in other channels are not for us."""
+        bot = MockBot()
+        handler = TextCommandHandler(bot)
+
+        event = TextMessageEvent(
+            sender_session_id=2,
+            sender_name="Alice",
+            message="Hello",
+            channel_ids=[200],  # Different channel
+            is_private=False,
+            raw={},
+        )
+
+        assert handler._is_message_for_us(event) is False
+
+    def test_is_message_for_us_no_channel_specified(self):
+        """Test messages with no channel are for us."""
+        bot = MockBot()
+        handler = TextCommandHandler(bot)
+
+        event = TextMessageEvent(
+            sender_session_id=2,
+            sender_name="Alice",
+            message="Hello",
+            channel_ids=[],  # No channel specified
+            is_private=False,
+            raw={},
+        )
+
+        assert handler._is_message_for_us(event) is True
+
+
+class TestPresenceHandlerChannelGreeting:
+    """Test channel greeting (for multiple users)."""
+
+    @pytest.mark.asyncio
+    async def test_greet_channel_one_user(self):
+        """Test greeting when one user is in channel."""
+        bot = MockBot()
+        bot.llm = MagicMock()
+        handler = PresenceHandler(bot, greet_on_join=True)
+
+        await handler._greet_channel(["Alice"])
+
+        bot._generate_oneoff_response_sync.assert_called()
+        call_args = bot._generate_oneoff_response_sync.call_args[0][0]
+        assert "Alice" in call_args
+
+    @pytest.mark.asyncio
+    async def test_greet_channel_two_users(self):
+        """Test greeting when two users are in channel."""
+        bot = MockBot()
+        bot.llm = MagicMock()
+        handler = PresenceHandler(bot, greet_on_join=True)
+
+        await handler._greet_channel(["Alice", "Bob"])
+
+        call_args = bot._generate_oneoff_response_sync.call_args[0][0]
+        assert "Alice" in call_args
+        assert "Bob" in call_args
+
+    @pytest.mark.asyncio
+    async def test_greet_channel_many_users(self):
+        """Test greeting when many users are in channel."""
+        bot = MockBot()
+        bot.llm = MagicMock()
+        handler = PresenceHandler(bot, greet_on_join=True)
+
+        await handler._greet_channel(["Alice", "Bob", "Charlie", "David"])
+
+        call_args = bot._generate_oneoff_response_sync.call_args[0][0]
+        # Check all names are mentioned
+        assert "Alice" in call_args
+        assert "Bob" in call_args
+        assert "Charlie" in call_args
+        assert "David" in call_args
+
+    @pytest.mark.asyncio
+    async def test_greet_channel_fallback(self):
+        """Test fallback greeting for channel."""
+        bot = MockBot()
+        bot.llm = None
+        handler = PresenceHandler(bot, greet_on_join=True)
+
+        await handler._greet_channel(["Alice", "Bob"])
+
+        bot.speak.assert_called()
+        call_args = bot.speak.call_args[0][0]
+        assert "everyone" in call_args.lower() or "hey" in call_args.lower()
