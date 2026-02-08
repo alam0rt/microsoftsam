@@ -156,29 +156,22 @@ def split_into_sentences(text: str, max_chars: int = 120) -> List[str]:
     return [c.strip() for c in chunks if c.strip()]
 
 
-def _pad_tts_text(text: str, min_chars: int = 80, min_words: int = 12) -> str:
+def _pad_tts_text(text: str, min_chars: int = 20, min_words: int = 4) -> str:
     """Pad text to avoid very short TTS inputs that can crash the vocoder.
     
-    Uses ellipses and 'hmm' sounds as padding - these generate natural pauses
-    without producing transcribable words that would cause feedback loops.
+    Uses ellipses as padding - these generate natural pauses without producing
+    transcribable words that would cause feedback loops.
+    
+    Only minimal padding is applied (20 chars / 4 words) to prevent vocoder crashes
+    while keeping audio duration reasonable.
     """
     cleaned = " ".join(text.split())
     if not cleaned:
         return ""
 
-    # Use non-transcribable padding that generates silence/pauses
-    # Ellipses create natural pauses, 'hmm' generates brief filler sounds
-    fillers = [
-        "...",
-        "... ...", 
-        "hmm...",
-        "... ... ...",
-    ]
-    filler_idx = 0
-
+    # Only pad if very short - add trailing ellipses for natural pause
     while len(cleaned) < min_chars or len(cleaned.split()) < min_words:
-        cleaned = f"{cleaned} {fillers[filler_idx % len(fillers)]}"
-        filler_idx += 1
+        cleaned = f"{cleaned}..."
 
     return cleaned
 
@@ -1377,26 +1370,11 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             if pipeline_start:
                 pipeline_total = time.time() - pipeline_start
                 logger.info(f"TTS complete: {tts_total*1000:.0f}ms synthesis, {audio_duration_ms:.0f}ms audio, pipeline total: {pipeline_total*1000:.0f}ms")
-            
-            # Wait for actual audio playback to complete
-            # Mumble sound_output.add_sound() is non-blocking - audio plays in background
-            # We must wait for playback to finish to prevent feedback loops
-            if audio_duration_ms > 0:
-                # Wait for audio to play out (with small buffer for network latency)
-                playback_wait = (audio_duration_ms / 1000) + 0.5
-                logger.debug(f"Waiting {playback_wait:.1f}s for audio playback to complete")
-                
-                # Check for barge-in during playback wait
-                wait_start = time.time()
-                while (time.time() - wait_start) < playback_wait:
-                    if self.turn_controller and self.turn_controller.is_cancelled():
-                        logger.info(f"Playback wait cancelled by barge-in after {(time.time()-wait_start)*1000:.0f}ms")
-                        break
-                    time.sleep(0.1)  # Check every 100ms
                     
         finally:
-            # Additional delay after playback to prevent picking up tail-end audio
-            time.sleep(0.5)
+            # Brief delay after synthesis before clearing _speaking flag
+            # This helps prevent feedback from tail-end of audio playback
+            time.sleep(0.3)
 
             # Clear any audio that accumulated during TTS playback
             for user_id in list(self.audio_buffers.keys()):
