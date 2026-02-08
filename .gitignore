@@ -9,3 +9,9 @@ __pycache__
 *.mp3
 *.flac
 *.ogg
+
+# secrets
+secrets/
+.secrets/
+*.secret
+*_api_key
