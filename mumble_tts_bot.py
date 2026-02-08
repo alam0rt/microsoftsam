@@ -150,6 +150,22 @@ def split_into_sentences(text: str, max_chars: int = 120) -> List[str]:
     return [c.strip() for c in chunks if c.strip()]
 
 
+def _pad_tts_text(text: str, min_chars: int = 80, min_words: int = 12) -> str:
+    """Pad text to avoid very short TTS inputs that can crash the vocoder."""
+    cleaned = " ".join(text.split())
+    if not cleaned:
+        return ""
+
+    filler = (
+        "Let me think for a second and give you a clear answer."
+    )
+
+    while len(cleaned) < min_chars or len(cleaned.split()) < min_words:
+        cleaned = f"{cleaned} {filler}"
+
+    return cleaned
+
+
 class StreamingLuxTTS(LuxTTS):
     """Extended LuxTTS with streaming support and bug fixes."""
     
@@ -184,26 +200,29 @@ class StreamingLuxTTS(LuxTTS):
         return_smooth: bool = False
     ) -> Generator[torch.Tensor, None, None]:
         """Stream speech generation by splitting text into sentences."""
+        text = _pad_tts_text(text)
+        if not text:
+            return
+
         sentences = split_into_sentences(text)
         
         if len(sentences) <= 1:
             # Pad very short text to avoid vocoder kernel size issues
             # Vocoder kernel needs 7+ frames, requiring substantial text
-            padded_text = text + ", yes." if len(text.strip()) < 20 else text
-            try:
-                wav = self.generate_speech(
-                    padded_text, encode_dict,
-                    num_steps=num_steps,
-                    guidance_scale=guidance_scale,
-                    t_shift=t_shift,
-                    speed=speed,
-                    return_smooth=return_smooth
-                )
+            padded_text = _pad_tts_text(text)
+            if not padded_text:
+                return
+            wav = self._generate_speech_safe(
+                padded_text,
+                encode_dict,
+                num_steps=num_steps,
+                guidance_scale=guidance_scale,
+                t_shift=t_shift,
+                speed=speed,
+                return_smooth=return_smooth,
+            )
+            if wav is not None:
                 yield wav
-            except Exception as e:
-                print(f"[TTS] Error generating speech for '{text[:50]}': {e}")
-                import traceback
-                traceback.print_exc()
             return
         
         for sentence in sentences:
@@ -212,23 +231,70 @@ class StreamingLuxTTS(LuxTTS):
                 continue
             # Pad very short sentences to avoid vocoder kernel size issues
             # The vocoder needs at least 7 frames, which requires ~20+ chars
-            if len(sentence) < 20:
-                sentence = sentence + ", yes."  # Add speakable padding
-            try:
-                wav = self.generate_speech(
-                    sentence, encode_dict,
-                    num_steps=num_steps,
-                    guidance_scale=guidance_scale,
-                    t_shift=t_shift,
-                    speed=speed,
-                    return_smooth=return_smooth
-                )
+            sentence = _pad_tts_text(sentence)
+            if not sentence:
+                continue
+            wav = self._generate_speech_safe(
+                sentence,
+                encode_dict,
+                num_steps=num_steps,
+                guidance_scale=guidance_scale,
+                t_shift=t_shift,
+                speed=speed,
+                return_smooth=return_smooth,
+            )
+            if wav is not None:
                 yield wav
-            except Exception as e:
-                print(f"[TTS] Error generating speech for sentence '{sentence[:30]}': {e}")
-                import traceback
-                traceback.print_exc()
-                # Don't yield anything on error - skip this sentence
+
+    def _generate_speech_safe(
+        self,
+        text: str,
+        encode_dict: dict,
+        num_steps: int = 4,
+        guidance_scale: float = 3.0,
+        t_shift: float = 0.5,
+        speed: float = 1.0,
+        return_smooth: bool = False,
+    ) -> torch.Tensor | None:
+        try:
+            return self.generate_speech(
+                text,
+                encode_dict,
+                num_steps=num_steps,
+                guidance_scale=guidance_scale,
+                t_shift=t_shift,
+                speed=speed,
+                return_smooth=return_smooth,
+            )
+        except RuntimeError as e:
+            message = str(e)
+            if "Kernel size" in message or "kernel size" in message or "padded input size" in message:
+                padded = _pad_tts_text(text, min_chars=160, min_words=24)
+                if padded and padded != text:
+                    try:
+                        return self.generate_speech(
+                            padded,
+                            encode_dict,
+                            num_steps=num_steps,
+                            guidance_scale=guidance_scale,
+                            t_shift=t_shift,
+                            speed=speed,
+                            return_smooth=return_smooth,
+                        )
+                    except Exception as retry_error:
+                        print(f"[TTS] Retry failed after padding: {retry_error}")
+                        import traceback
+                        traceback.print_exc()
+                        return None
+            print(f"[TTS] Error generating speech for '{text[:50]}': {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+        except Exception as e:
+            print(f"[TTS] Error generating speech for '{text[:50]}': {e}")
+            import traceback
+            traceback.print_exc()
+            return None
 
 
 # =============================================================================
@@ -1150,6 +1216,9 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
     
     def _speak_sync(self, text: str, voice_prompt: dict, pipeline_start: float = None, tracker: 'LatencyTracker' = None):
         """Generate and play speech."""
+        text = _pad_tts_text(text)
+        if not text:
+            return
         self._speaking.set()
         tts_start = time.time()
         

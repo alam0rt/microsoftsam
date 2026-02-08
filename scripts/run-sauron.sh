@@ -12,14 +12,14 @@ set -euo pipefail
 
 UNIT_NAME="mumble-voice-bot"
 REMOTE="sam@sauron"
-WORKDIR="/home/sam/projects/microsoftsam"
+WORKDIR="/srv/share/sam/projects/microsoftsam"
 CONFIG="config.sauron.yaml"
 
 # Sync local changes to sauron first
 sync_changes() {
     echo "Syncing changes to sauron..."
     rsync -av --exclude='.venv*' --exclude='__pycache__' --exclude='*.egg-info' \
-        --exclude='.git' --exclude='vendor' --exclude='*.pyc' --exclude='latency.jsonl' \
+        --exclude='.git' --exclude='*.pyc' --exclude='latency.jsonl' \
         . "${REMOTE}:${WORKDIR}/"
 }
 
