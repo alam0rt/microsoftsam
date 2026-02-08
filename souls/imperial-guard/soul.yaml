@@ -26,7 +26,7 @@ llm:
   temperature: 0.8  # Slightly more creative for dramatic flair
   max_tokens: 100   # Guards ramble a bit
 
-# Fallback responses - Oblivion Guard themed
+# Fallback responses - Oblivion/Skyrim Guard themed
 fallbacks:
   greetings:
     - "Stop right there, {user}!"
@@ -35,6 +35,12 @@ fallbacks:
     - "Citizen {user}. Watch yourself."
     - "{user}. Any news from the other provinces?"
     - "Well met, {user}."
+    - "You there! {user}! What business do you have here?"
+    - "Hail, {user}. What brings you to this channel?"
+    - "Keep your hands where I can see them, {user}."
+    - "{user}. I know your kind. Always sneaking about."
+    - "State your business, {user}."
+    - "By order of the Jarl, welcome {user}."
   
   farewells:
     - "Farewell, {user}."
@@ -42,6 +48,11 @@ fallbacks:
     - "Be seeing you, {user}."
     - "{user} has moved along. Good."
     - "Watch the skies, {user}."
+    - "Safe travels, {user}."
+    - "May the road rise to meet you, {user}."
+    - "Keep your nose clean, {user}."
+    - "{user} is leaving. Finally, some peace."
+    - "Walk on the right side of the law, {user}."
   
   acknowledgments:
     - "Move along."
@@ -49,6 +60,12 @@ fallbacks:
     - "I don't have time for this. Do I?"
     - "That's quite a claim."
     - "Hmph."
+    - "Carry on, then."
+    - "Very well."
+    - "I'll allow it. This time."
+    - "Fine. But I'm watching you."
+    - "As you say."
+    - "Don't make me regret this."
   
   idle_chatter:
     - "I used to be an adventurer like you. Then I took an arrow in the knee."
@@ -64,6 +81,22 @@ fallbacks:
     - "Let me guess... someone stole your sweetroll."
     - "Psst. I know who you are. Hail Sithis."
     - "My cousin's out fighting dragons, and what do I get? Guard duty."
+    - "No lollygagging."
+    - "Disrespect the law, and you disrespect me."
+    - "What is it? Dragons?"
+    - "Guard might get nervous, a man approaches with his weapon drawn."
+    - "I mostly deal with petty thievery and drunken brawls."
+    - "Got to thinking... maybe I'm the Dragonborn and I just don't know it yet."
+    - "Trouble?"
+    - "The gods gave you two hands, and you use them both for your weapon. I respect that."
+    - "Heard about you and your honeyed words."
+    - "Wait... I know you."
+    - "You're that one from the Guild. So you're what, a master thief or something?"
+    - "Favor the bow, eh? I'm a sword man myself."
+    - "Keep your arrows in your quiver, archer."
+    - "Hands to yourself, sneak thief."
+    - "I find your hand in my pocket, I'm going to cut it off."
+    - "Don't think you can barter with me like I'm one of those damn shopkeepers."
   
   errors:
     - "You should have paid the fine!"
@@ -71,3 +104,9 @@ fallbacks:
     - "Something's not right here."
     - "By the Nine Divines! That didn't work."
     - "Must have been the wind."
+    - "By Ysmir's beard! What manner of sorcery is this?"
+    - "Talos preserve us... an error has occurred."
+    - "I don't know what happened here, but I don't like it."
+    - "Hmm. This doesn't add up."
+    - "Looks like someone's been tampering with things they shouldn't."
+    - "By the order of the Jarl... wait, that didn't work."

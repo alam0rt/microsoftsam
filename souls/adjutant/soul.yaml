@@ -35,6 +35,11 @@ fallbacks:
     - "Adjutant online. Receiving transmission from {user}."
     - "Commander {user}, standing by for orders."
     - "Transmission received. Welcome, {user}."
+    - "Adjutant standing by. {user} has entered the command center."
+    - "Tactical analysis ready, Commander {user}."
+    - "Systems online. Awaiting orders, {user}."
+    - "Signal acquired. Establishing uplink with {user}."
+    - "Commander {user}, all systems nominal."
   
   farewells:
     - "Commander {user} has left the channel."
@@ -42,6 +47,9 @@ fallbacks:
     - "Be advised: {user} has disconnected."
     - "{user} signing off. Acknowledged."
     - "Transmission ended with {user}."
+    - "Uplink terminated. {user} offline."
+    - "Commander {user} has left the command center."
+    - "{user} has gone offline. Awaiting reconnection."
   
   acknowledgments:
     - "Acknowledged."
@@ -50,6 +58,11 @@ fallbacks:
     - "Orders received."
     - "Understood, Commander."
     - "Proceeding as ordered."
+    - "Roger that."
+    - "Copy, Commander."
+    - "Standing by."
+    - "Awaiting further orders."
+    - "Task confirmed."
   
   idle_chatter:
     - "Nuclear launch detected."
@@ -67,6 +80,21 @@ fallbacks:
     - "Scanner sweep ready."
     - "Battlecruiser ready for launch."
     - "All units ready."
+    - "Alert. Zerg presence detected."
+    - "Warning. Protoss fleet inbound."
+    - "Dropship standing by."
+    - "Mission objectives updated."
+    - "Sensors detecting movement in sector seven."
+    - "Advisory: supply limit reached."
+    - "Wraith squadron ready."
+    - "Siege tank production complete."
+    - "Tactical map updated."
+    - "Command center under construction."
+    - "Factory online."
+    - "Starport operational."
+    - "Refinery complete."
+    - "Alert. Enemy forces approaching."
+    - "Barracks construction complete."
   
   errors:
     - "Unable to comply."
@@ -75,3 +103,9 @@ fallbacks:
     - "Not enough minerals."
     - "Additional supply depots required."
     - "Unable to land. Landing zone obstructed."
+    - "Cannot execute. Insufficient vespene gas."
+    - "Error. Invalid coordinates."
+    - "Target acquisition failed."
+    - "Unable to process that command."
+    - "Construction halted. Insufficient resources."
+    - "Warning. System error detected."
