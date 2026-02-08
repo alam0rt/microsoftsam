@@ -1410,18 +1410,29 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 wav_float = wav_chunk.numpy().squeeze()
                 wav_float = np.clip(wav_float, -1.0, 1.0)
                 pcm = (wav_float * 32767).astype(np.int16)
-                total_audio_samples += len(pcm)
-                print(f"[TTS-LOOP] Chunk {chunk_count}: {len(pcm)} samples, calling add_sound...")
+                chunk_samples = len(pcm)
+                total_audio_samples += chunk_samples
+                print(f"[TTS-LOOP] Chunk {chunk_count}: {chunk_samples} samples, calling add_sound...")
                 self.mumble.sound_output.add_sound(pcm.tobytes())
                 print(f"[TTS-LOOP] Chunk {chunk_count}: add_sound completed")
+                
+                # Wait for most of the audio to play before generating next chunk
+                # This creates natural pauses between sentences and prevents buffer overflow
+                # LuxTTS outputs 48kHz audio
+                chunk_duration_sec = chunk_samples / 48000
+                # Wait for 80% of audio duration to create natural pacing
+                wait_time = chunk_duration_sec * 0.8
+                if wait_time > 0.1:
+                    print(f"[TTS-LOOP] Waiting {wait_time:.2f}s for audio playback...")
+                    time.sleep(wait_time)
 
             tts_total = time.time() - tts_start
 
             # Record TTS stats
             self._record_tts_stat(tts_total * 1000)
 
-            # Calculate audio duration (24kHz sample rate for LuxTTS output)
-            audio_duration_ms = (total_audio_samples / 24000) * 1000
+            # Calculate audio duration (48kHz sample rate for LuxTTS output)
+            audio_duration_ms = (total_audio_samples / 48000) * 1000
 
             # Mark playback end and finalize tracker
             if tracker:
