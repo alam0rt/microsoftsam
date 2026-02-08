@@ -14,16 +14,14 @@ import threading
 import time
 from unittest.mock import MagicMock
 
-import pytest
-
 from mumble_voice_bot.turn_controller import (
-    TurnController,
-    TurnState,
     GenerationTracker,
     InterruptionClassifier,
     InterruptionHandler,
     InterruptionMetrics,
     InterruptionType,
+    TurnController,
+    TurnState,
 )
 
 

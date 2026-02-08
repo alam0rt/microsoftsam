@@ -16,11 +16,11 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Callable
+from typing import Any, AsyncIterator
 
-from mumble_voice_bot.interfaces.llm import LLMProvider, LLMResponse
-from mumble_voice_bot.interfaces.stt import PartialSTTResult, STTProvider
-from mumble_voice_bot.latency import LatencyTracker, LatencyLogger
+from mumble_voice_bot.interfaces.llm import LLMProvider
+from mumble_voice_bot.interfaces.stt import STTProvider
+from mumble_voice_bot.latency import LatencyLogger, LatencyTracker
 from mumble_voice_bot.phrase_chunker import PhraseChunker
 from mumble_voice_bot.transcript_stabilizer import StreamingTranscriptBuffer
 

@@ -26,8 +26,8 @@ import asyncio
 import json
 import logging
 import time
-from dataclasses import dataclass, field
-from typing import AsyncIterator, Callable, Any
+from dataclasses import dataclass
+from typing import Any, AsyncIterator, Callable
 
 from mumble_voice_bot.interfaces.stt import (
     PartialSTTResult,
@@ -396,7 +396,7 @@ class StreamingASR(STTProvider):
 
                 if is_final:
                     self._metrics.final_time = time.time()
-                    remaining = self._stabilizer.finalize(text)
+                    self._stabilizer.finalize(text)
                     yield PartialSTTResult(
                         text=text,
                         stable_text=text,
@@ -545,7 +545,7 @@ class LocalStreamingASR(STTProvider):
 
                 if result.text:
                     # Update stabilizer
-                    stable_delta = self._buffer.add_partial(result.text)
+                    self._buffer.add_partial(result.text)
                     stable_text = self._buffer.get_accumulated()
 
                     yield PartialSTTResult(
@@ -560,7 +560,7 @@ class LocalStreamingASR(STTProvider):
             result = await self._provider.transcribe(
                 audio_buffer, sample_rate, sample_width, channels, language
             )
-            remaining = self._buffer.finalize(result.text)
+            self._buffer.finalize(result.text)
 
             yield PartialSTTResult(
                 text=result.text,

@@ -15,15 +15,12 @@ from typing import AsyncIterator
 import pytest
 
 from mumble_voice_bot.interfaces.stt import PartialSTTResult, STTProvider, STTResult
-from mumble_voice_bot.latency import LatencyTracker, TurnLatency
+from mumble_voice_bot.latency import LatencyTracker
 from mumble_voice_bot.providers.streaming_asr import (
     LocalStreamingASR,
-    StreamingASR,
     StreamingASRConfig,
-    StreamingASRMetrics,
 )
 from mumble_voice_bot.streaming_pipeline import (
-    StreamingEvent,
     StreamingPipelineConfig,
     StreamingPipelineResult,
     StreamingVoicePipeline,
@@ -32,7 +29,6 @@ from mumble_voice_bot.transcript_stabilizer import (
     StreamingTranscriptBuffer,
     TranscriptStabilizer,
 )
-
 
 # --- Mock Providers ---
 

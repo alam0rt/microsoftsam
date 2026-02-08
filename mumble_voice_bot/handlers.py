@@ -305,7 +305,7 @@ class TextCommandHandler(MumbleEventHandler):
     async def on_text_message(self, event: TextMessageEvent) -> None:
         """Handle incoming text message."""
         logger.debug(f"Text message received: {event.message[:50]}... from session {event.sender_session_id}")
-        
+
         # Ignore our own messages
         try:
             my_session = self._bot.mumble.users.myself_session

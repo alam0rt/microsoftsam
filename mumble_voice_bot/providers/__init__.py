@@ -2,8 +2,6 @@
 
 from mumble_voice_bot.providers.mumble_events import EventDispatcher
 from mumble_voice_bot.providers.openai_llm import OpenAIChatLLM
-from mumble_voice_bot.providers.wyoming_stt import WyomingSTT, WyomingSTTSync
-from mumble_voice_bot.providers.wyoming_tts import WyomingTTS, WyomingTTSSync
 
 # WebSocket streaming ASR
 from mumble_voice_bot.providers.streaming_asr import (
@@ -12,6 +10,8 @@ from mumble_voice_bot.providers.streaming_asr import (
     StreamingASRConfig,
     StreamingASRMetrics,
 )
+from mumble_voice_bot.providers.wyoming_stt import WyomingSTT, WyomingSTTSync
+from mumble_voice_bot.providers.wyoming_tts import WyomingTTS, WyomingTTSSync
 
 # Streaming ASR providers (optional dependencies)
 try:

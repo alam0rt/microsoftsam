@@ -92,6 +92,20 @@ except ImportError as e:
     LATENCY_TRACKING_AVAILABLE = False
     logger.warning(f"Latency tracking not available: {e}")
 
+# Import performance improvements (Phase 1-3 from docs/perf.md)
+try:
+    from mumble_voice_bot.perf import (
+        BoundedTTSQueue,
+        DropPolicy,
+        RollingLatencyTracker,
+        TTSQueueItem,
+        TurnIdCoordinator,
+    )
+    PERF_AVAILABLE = True
+except ImportError as e:
+    PERF_AVAILABLE = False
+    logger.warning(f"Performance improvements not available: {e}")
+
 # Import event system
 try:
     from mumble_voice_bot.handlers import ConnectionHandler, PresenceHandler, TextCommandHandler
@@ -158,10 +172,10 @@ def split_into_sentences(text: str, max_chars: int = 120) -> List[str]:
 
 def _pad_tts_text(text: str, min_chars: int = 20, min_words: int = 4) -> str:
     """Pad text to avoid very short TTS inputs that can crash the vocoder.
-    
+
     Uses ellipses as padding - these generate natural pauses without producing
     transcribable words that would cause feedback loops.
-    
+
     Only minimal padding is applied (20 chars) to prevent vocoder crashes
     while keeping audio duration reasonable.
     """
@@ -455,7 +469,7 @@ class MumbleVoiceBot:
 
         # Response staleness settings
         self.max_response_staleness = max_response_staleness  # skip responses older than this (seconds)
-        
+
         # Barge-in settings
         self.barge_in_enabled = barge_in_enabled  # allow users to interrupt bot
 
@@ -469,7 +483,7 @@ class MumbleVoiceBot:
         self.channel_history_max = 30  # Keep last 30 messages
         self.conversation_timeout = 300.0  # 5 minutes - clear history after inactivity
         self.last_activity_time = time.time()
-        
+
         # Legacy per-user history (kept for compatibility)
         self.conversation_history = {}  # user_id -> list of messages
         self.last_conversation_time = {}  # user_id -> timestamp
@@ -480,8 +494,22 @@ class MumbleVoiceBot:
 
         # Threading
         self._asr_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ASR")  # Allow 2 workers
-        self._tts_queue = queue.Queue()
         self._tts_lock = threading.Lock()
+
+        # Turn ID coordination and bounded TTS queue (Phase 1 from docs/perf.md)
+        if PERF_AVAILABLE:
+            self._turn_coordinator = TurnIdCoordinator()
+            self._tts_queue = BoundedTTSQueue(
+                maxsize=10,
+                policy=DropPolicy.DROP_STALE,
+                turn_coordinator=self._turn_coordinator,
+            )
+            self._rolling_latency = RollingLatencyTracker(window_size=100)
+            print("[Perf] Using bounded TTS queue with DROP_STALE policy (maxsize=10)")
+        else:
+            self._turn_coordinator = None
+            self._tts_queue = queue.Queue()
+            self._rolling_latency = None
 
         # Latency tracking and turn control
         if LATENCY_TRACKING_AVAILABLE:
@@ -937,61 +965,61 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
     def _get_channel_history(self) -> list[dict]:
         """Get shared channel conversation history, clearing if stale."""
         current_time = time.time()
-        
+
         # Clear history if conversation went stale
         if current_time - self.last_activity_time > self.conversation_timeout:
             if self.channel_history:
                 print(f"[Chat] Cleared stale channel history ({len(self.channel_history)} messages)")
             self.channel_history = []
-        
+
         self.last_activity_time = current_time
         return self.channel_history
-    
+
     def _add_to_channel_history(self, role: str, content: str, speaker: str = None):
         """Add a message to shared channel history.
-        
+
         Args:
             role: "user" for human speakers, "assistant" for bot responses
             content: The raw message content
             speaker: Name of who said it (for user messages)
         """
         history = self._get_channel_history()
-        
+
         # Format the content based on role
         if role == "user" and speaker:
             formatted_content = f"{speaker}: {content}"
         else:
             formatted_content = content
-        
+
         history.append({
             "role": role,
             "content": formatted_content,
             "speaker": speaker,
             "time": time.time()
         })
-        
+
         # Trim to max size
         if len(history) > self.channel_history_max:
             self.channel_history = history[-self.channel_history_max:]
-    
+
     def _build_llm_messages(self, current_speaker: str = None) -> list[dict]:
         """Build LLM message list from channel history.
-        
+
         Creates a natural conversation flow where the LLM can see
         what everyone said, not just the current speaker.
         """
         messages = []
         history = self._get_channel_history()
-        
+
         # Add time context at the start
         time_ctx = self._get_time_context()
         channel_ctx = self._get_channel_context()
-        
+
         # Build context preamble
         context_parts = [f"[{time_ctx}]"]
         if channel_ctx:
             context_parts.append(f"[{channel_ctx}]")
-        
+
         # Add recent conversation as context
         if history:
             # Group consecutive messages by role for cleaner context
@@ -1000,20 +1028,20 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                     "role": entry["role"],
                     "content": entry["content"]
                 })
-        
+
         # If no history yet, add context to first user message
         if not messages and context_parts:
             return messages  # Will be added with first actual message
-        
+
         # Inject context into first user message if present
         if messages and messages[0]["role"] == "user":
             messages[0]["content"] = " ".join(context_parts) + " " + messages[0]["content"]
-        
+
         return messages
 
     def _get_history(self, user_id: int) -> list[dict]:
         """Get conversation history for a user, clearing if stale.
-        
+
         NOTE: This now returns the shared channel history formatted for the LLM,
         not per-user history. The user_id is kept for API compatibility.
         """
@@ -1021,7 +1049,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
     def _add_to_history(self, user_id: int, role: str, content: str, user_name: str = None, include_time: bool = False):
         """Add a message to conversation history.
-        
+
         NOTE: This now adds to the shared channel history.
         """
         self._add_to_channel_history(role, content, user_name)
@@ -1301,6 +1329,11 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 # Track when user finished speaking for staleness detection
                 pipeline_start = time.time()
 
+                # Get a new turn ID for this user utterance (for stale response dropping)
+                turn_id = None
+                if self._turn_coordinator:
+                    turn_id = self._turn_coordinator.new_turn(str(user_id))
+
                 # Mark LLM start in tracker
                 if tracker:
                     tracker.llm_start()
@@ -1319,8 +1352,12 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                     if tracker:
                         tracker.llm_complete(response)
 
-                    # Check for staleness - if user said something new, abort
-                    if user_id in self.pending_text:
+                    # Check for staleness via turn ID (preferred) or pending_text (fallback)
+                    if self._turn_coordinator and turn_id:
+                        if self._turn_coordinator.is_stale(str(user_id), turn_id):
+                            logger.info("Pipeline abort: turn is stale (user started new turn)")
+                            return
+                    elif user_id in self.pending_text:
                         logger.info("Pipeline abort: user spoke again", extra={"latency_ms": llm_time * 1000})
                         return
 
@@ -1336,11 +1373,39 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
                     logger.info(f'Queuing TTS: "{response}" (LLM took {llm_time*1000:.0f}ms)')
 
-                    # Queue TTS with timing metadata and tracker
-                    self._tts_queue.put((response, self.voice_prompt, pipeline_start, user_id, tracker))
+                    # Queue TTS with timing metadata, tracker, and turn ID
+                    self._queue_tts(response, self.voice_prompt, pipeline_start, user_id, tracker, turn_id)
 
                 except Exception as e:
                     logger.error(f"LLM error: {e}", exc_info=True)
+
+    def _queue_tts(self, text: str, voice_prompt: dict, pipeline_start: float, user_id: int, tracker=None, turn_id: int = None):
+        """Queue text for TTS synthesis.
+
+        Args:
+            text: Text to synthesize.
+            voice_prompt: Voice embedding for TTS.
+            pipeline_start: Timestamp when pipeline started.
+            user_id: User who triggered the response.
+            tracker: LatencyTracker for this turn.
+            turn_id: Turn ID for staleness checking.
+        """
+        if PERF_AVAILABLE and turn_id is not None:
+            # Use TTSQueueItem for better staleness checking
+            item = TTSQueueItem(
+                user_id=str(user_id),
+                turn_id=turn_id,
+                text=text,
+                chunk_index=0,
+            )
+            # Attach extra metadata as attributes
+            item.voice_prompt = voice_prompt
+            item.pipeline_start = pipeline_start
+            item.tracker = tracker
+            self._tts_queue.put(item)
+        else:
+            # Fallback to tuple format
+            self._tts_queue.put((text, voice_prompt, pipeline_start, user_id, tracker))
 
     # =========================================================================
     # TTS
@@ -1354,21 +1419,42 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 item = self._tts_queue.get(timeout=0.5)
             except queue.Empty:
                 continue
+            # Handle None from BoundedTTSQueue timeout
+            if item is None:
+                continue
 
-            # Unpack with optional timing metadata and tracker
+            # Unpack item - either TTSQueueItem (new) or tuple (legacy)
             tracker = None
-            if len(item) == 5:
-                text, voice_prompt, pipeline_start, user_id, tracker = item
-            elif len(item) == 4:
-                text, voice_prompt, pipeline_start, user_id = item
+            turn_id = None
+            if hasattr(item, 'text'):
+                # New TTSQueueItem format
+                text = item.text
+                voice_prompt = getattr(item, 'voice_prompt', self.voice_prompt)
+                pipeline_start = getattr(item, 'pipeline_start', None)
+                user_id = item.user_id
+                turn_id = item.turn_id
+                tracker = getattr(item, 'tracker', None)
+            elif isinstance(item, tuple):
+                # Legacy tuple format
+                if len(item) == 5:
+                    text, voice_prompt, pipeline_start, user_id, tracker = item
+                elif len(item) == 4:
+                    text, voice_prompt, pipeline_start, user_id = item
+                else:
+                    text, voice_prompt = item
+                    pipeline_start = None
+                    user_id = None
             else:
-                text, voice_prompt = item
-                pipeline_start = None
-                user_id = None
+                logger.warning(f"Unknown TTS queue item type: {type(item)}")
+                continue
 
             try:
-                # Check staleness before TTS - if user spoke again, skip
-                if user_id is not None and user_id in self.pending_text:
+                # Check staleness via turn ID (preferred) or pending_text (fallback)
+                if self._turn_coordinator and turn_id is not None and user_id is not None:
+                    if self._turn_coordinator.is_stale(str(user_id), turn_id):
+                        logger.info("[TTS] Skipping stale response - turn superseded")
+                        continue
+                elif user_id is not None and user_id in self.pending_text:
                     print("[TTS] Skipping stale response - user spoke again")
                     continue
 
@@ -1389,7 +1475,9 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             except Exception as e:
                 print(f"[TTS] Error: {e}")
             finally:
-                self._tts_queue.task_done()
+                # task_done only exists on standard Queue, not BoundedTTSQueue
+                if hasattr(self._tts_queue, 'task_done'):
+                    self._tts_queue.task_done()
 
         print("[TTS] Worker stopped")
 
@@ -1431,7 +1519,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 text, voice_prompt, num_steps=self.num_steps
             ):
                 chunk_count += 1
-                
+
                 # Check for barge-in cancellation
                 if self.turn_controller and self.turn_controller.is_cancelled():
                     logger.info("TTS cancelled due to barge-in")
@@ -1456,7 +1544,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 chunk_samples = len(pcm)
                 total_audio_samples += chunk_samples
                 self.mumble.sound_output.add_sound(pcm.tobytes())
-                
+
                 # Wait for most of the audio to play before generating next chunk
                 # This creates natural pauses between sentences and prevents buffer overflow
                 # LuxTTS outputs 48kHz audio
@@ -1482,7 +1570,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             if pipeline_start:
                 pipeline_total = time.time() - pipeline_start
                 logger.info(f"TTS complete: {tts_total*1000:.0f}ms synthesis, {audio_duration_ms:.0f}ms audio, pipeline total: {pipeline_total*1000:.0f}ms")
-                    
+
         finally:
             # Brief delay after synthesis before clearing _speaking flag
             # This helps prevent feedback from tail-end of audio playback
@@ -1507,7 +1595,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             time.sleep(self._stats_interval)
             if self._shutdown.is_set():
                 break
-            
+
             with self._stats_lock:
                 asr_count = self._asr_count
                 asr_avg = self._asr_total_ms / asr_count if asr_count > 0 else 0
@@ -1515,19 +1603,41 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 llm_avg = self._llm_total_ms / llm_count if llm_count > 0 else 0
                 tts_count = self._tts_count
                 tts_avg = self._tts_total_ms / tts_count if tts_count > 0 else 0
-            
+
             tts_queue_size = self._tts_queue.qsize()
             audio_buffers = len(self.audio_buffers)
             pending_text = len(self.pending_text)
             speaking = self._speaking.is_set()
-            
-            logger.info(
+
+            # Build basic stats line
+            stats_line = (
                 f"[Stats] ASR: {asr_count} ({asr_avg:.0f}ms avg) | "
                 f"LLM: {llm_count} ({llm_avg:.0f}ms avg) | "
                 f"TTS: {tts_count} ({tts_avg:.0f}ms avg) | "
                 f"Queues: TTS={tts_queue_size}, AudioBuf={audio_buffers}, Pending={pending_text} | "
                 f"Speaking: {speaking}"
             )
+
+            # Add rolling latency percentiles if available
+            if self._rolling_latency:
+                stats = self._rolling_latency.get_stats()
+                if stats:
+                    perf_parts = []
+                    for category, values in stats.items():
+                        if values['count'] > 0:
+                            perf_parts.append(
+                                f"{category}: p50={values['p50']:.0f}ms p95={values['p95']:.0f}ms"
+                            )
+                    if perf_parts:
+                        stats_line += f" | {' | '.join(perf_parts)}"
+
+            # Add queue drop count if available
+            if hasattr(self._tts_queue, 'drop_count'):
+                drop_count = self._tts_queue.drop_count
+                if drop_count > 0:
+                    stats_line += f" | Drops: {drop_count}"
+
+            logger.info(stats_line)
         logger.info("Stats logger stopped")
 
     def _record_asr_stat(self, duration_ms: float):
@@ -1535,25 +1645,35 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         with self._stats_lock:
             self._asr_count += 1
             self._asr_total_ms += duration_ms
+        # Also record to rolling tracker
+        if self._rolling_latency:
+            self._rolling_latency.record("asr", duration_ms)
 
     def _record_llm_stat(self, duration_ms: float):
         """Record LLM processing time for stats."""
         with self._stats_lock:
             self._llm_count += 1
             self._llm_total_ms += duration_ms
+        # Also record to rolling tracker
+        if self._rolling_latency:
+            self._rolling_latency.record("llm", duration_ms)
 
     def _record_tts_stat(self, duration_ms: float):
         """Record TTS processing time for stats."""
         with self._stats_lock:
             self._tts_count += 1
             self._tts_total_ms += duration_ms
+        # Also record to rolling tracker
+        if self._rolling_latency:
+            self._rolling_latency.record("tts", duration_ms)
 
     def speak(self, text: str, blocking: bool = False):
         """Queue text to be spoken."""
         if blocking:
             self._speak_sync(text, self.voice_prompt, time.time(), None)
         else:
-            self._tts_queue.put((text, self.voice_prompt, time.time(), None, None))
+            # Use the new queue helper for consistent handling
+            self._queue_tts(text, self.voice_prompt, time.time(), None, None, None)
 
     # =========================================================================
     # Legacy Callbacks (used when event system is unavailable)
