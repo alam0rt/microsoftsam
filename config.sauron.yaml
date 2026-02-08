@@ -1,19 +1,15 @@
 # Sauron Configuration for Mumble Voice Bot
 
+# Use the Adjutant soul (StarCraft Terran AI voice)
+soul: "adjutant"
+
 llm:
   endpoint: "http://localhost:8100/v1/chat/completions"
   model: "/model"
-  prompt_file: "prompts/default.md"
-  personality: "advisor"
   timeout: 10.0
-  max_tokens: 50  # Force very short responses for speed
-  temperature: 0.7
 
 tts:
-  ref_audio: "raf.wav"
-  #ref_audio: "terrain-base-attack.mp3"
   num_steps: 3  # Reduced from 4 for speed
-  speed: 1.0
   device: "cpu"  # T1000 8GB can't fit vLLM + Nemotron + TTS on GPU
 
 mumble:

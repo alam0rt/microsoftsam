@@ -25,12 +25,13 @@ set -e
 if [ ! -d "${WORKDIR}/.git" ]; then
     echo "Cloning repository..."
     mkdir -p "$(dirname ${WORKDIR})"
-    git clone "${REPO_URL}" "${WORKDIR}"
+    git clone --recurse-submodules "${REPO_URL}" "${WORKDIR}"
 else
     echo "Pulling latest changes..."
     cd "${WORKDIR}"
     git fetch origin
     git reset --hard origin/main
+    git submodule update --init --recursive
 fi
 EOF
 }
