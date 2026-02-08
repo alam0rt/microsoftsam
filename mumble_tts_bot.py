@@ -478,8 +478,6 @@ class MumbleVoiceBot:
         if LATENCY_TRACKING_AVAILABLE:
             self.latency_logger = LatencyLogger()
             self.turn_controller = TurnController()
-            # Register barge-in callback to clear audio output
-            self.turn_controller.on_barge_in(self._handle_barge_in)
             print("[Latency] Tracking enabled - logging to latency.jsonl")
         else:
             self.latency_logger = None
@@ -986,19 +984,6 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             return asyncio.run(coroutine)
 
     # =========================================================================
-    # Barge-in Handling
-    # =========================================================================
-
-    def _handle_barge_in(self):
-        """Handle barge-in: stop current TTS playback."""
-        try:
-            # Clear the Mumble output buffer
-            self.mumble.sound_output.clear()
-            print("[Barge-in] Cleared audio output buffer")
-        except Exception as e:
-            print(f"[Barge-in] Error clearing buffer: {e}")
-
-    # =========================================================================
     # Audio Processing
     # =========================================================================
 
@@ -1015,11 +1000,12 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         # When bot speaks, users' microphones pick up the audio and send it back
         # This causes the bot to transcribe its own TTS output as user speech
         if self._speaking.is_set():
-            # Still allow barge-in detection for high RMS
+            # Barge-in detection: if user speaks loudly while bot is speaking,
+            # trigger interruption via TurnController (sets is_cancelled flag)
+            # The TTS generation loop checks is_cancelled() and stops gracefully
             rms = pcm_rms(sound_chunk.pcm)
-            if self.turn_controller and rms > self.asr_threshold * 1.5:  # Higher threshold for barge-in
-                if self.turn_controller.request_barge_in():
-                    print(f"\n[Barge-in] User {user_name} interrupted bot")
+            if self.turn_controller and rms > self.asr_threshold * 1.5:
+                self.turn_controller.request_barge_in()  # Sets is_cancelled flag
             return  # Don't buffer audio while speaking
 
         rms = pcm_rms(sound_chunk.pcm)

@@ -1,0 +1,69 @@
+# Minimum Latency Configuration
+# 
+# This config profile is optimized for minimum time-to-first-audio (TTFA).
+# Target: 400-800ms TTFA for typical utterances.
+#
+# Key optimizations:
+# 1. Streaming ASR with small chunk size (80-160ms)
+# 2. Early LLM start on stable transcript prefix
+# 3. Phrase-based TTS streaming
+# 4. ASR/LLM overlap for maximum parallelism
+
+# Mumble connection
+mumble:
+  host: ${MUMBLE_HOST}
+  port: 64738
+  user: "VoiceBot"
+  channel: ${MUMBLE_CHANNEL}
+
+# LLM - use fast local model
+llm:
+  endpoint: "http://localhost:11434/v1/chat/completions"
+  model: "llama3.2:3b"  # Small, fast model
+  timeout: 10.0
+  max_tokens: 150  # Limit response length for speed
+  temperature: 0.7
+
+# Speech-to-Text - streaming optimized
+stt:
+  # Options: wyoming_streaming, websocket, sherpa_nemotron, nemotron_nemo
+  provider: "wyoming_streaming"
+  
+  # Wyoming settings (for wyoming/wyoming_streaming)
+  wyoming_host: "localhost"
+  wyoming_port: 10300
+  
+  # WebSocket streaming settings (for websocket provider)
+  # websocket_endpoint: "ws://localhost:50051/asr/streaming"
+  
+  # Streaming parameters
+  streaming_chunk_ms: 160  # 80ms = lowest latency, 160ms = good balance
+  streaming_stability_window: 2  # Partials before text is stable
+  streaming_min_stable_chars: 10  # Min chars before emitting stable text
+
+# Text-to-Speech - fast settings
+tts:
+  num_steps: 4  # Fewer diffusion steps = faster but lower quality
+  speed: 1.1  # Slightly faster speech
+
+# Pipeline - streaming optimized
+pipeline:
+  silence_threshold_ms: 800  # Faster end-of-speech detection
+  max_recording_ms: 15000  # Limit max recording length
+
+# Streaming pipeline config
+streaming:
+  enabled: true
+  llm_start_threshold: 50  # Start LLM after 50 stable chars
+  llm_abort_on_change: false  # Don't abort if transcript changes
+  change_threshold: 20
+  phrase_min_chars: 30  # Small phrases for faster TTS start
+  phrase_max_chars: 100
+  phrase_timeout_ms: 300  # Fast phrase timeout
+
+# Bot behavior
+bot:
+  wake_word: null  # No wake word = respond to all speech
+  enable_conversation: true
+  conversation_timeout: 300.0  # 5 minutes
+  max_response_staleness: 3.0  # Skip old responses quickly

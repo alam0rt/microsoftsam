@@ -144,6 +144,8 @@ class STTConfig:
         provider: STT provider to use. Options:
                   - "local" (default): Use local Whisper via LuxTTS
                   - "wyoming": Use Wyoming STT server
+                  - "wyoming_streaming": Wyoming with local streaming wrapper
+                  - "websocket": WebSocket streaming ASR server
                   - "sherpa_nemotron": Use Nemotron via sherpa-onnx (streaming)
                   - "nemotron_nemo": Use Nemotron via NeMo framework (streaming)
         wyoming_host: Wyoming STT server host.
@@ -156,8 +158,12 @@ class STTConfig:
         nemotron_model: HuggingFace model name for NeMo Nemotron.
         nemotron_chunk_ms: Chunk size in ms for streaming (80, 160, 560, 1120).
         nemotron_device: Device for NeMo Nemotron ("cuda" or "cpu").
+        websocket_endpoint: WebSocket endpoint for streaming ASR.
+        streaming_chunk_ms: Chunk size for streaming ASR (80, 160, 500).
+        streaming_stability_window: Partials before text is stable.
+        streaming_min_stable_chars: Min chars before emitting stable text.
     """
-    provider: str = "local"  # local, wyoming, sherpa_nemotron, nemotron_nemo
+    provider: str = "local"  # local, wyoming, wyoming_streaming, websocket, sherpa_nemotron, nemotron_nemo
 
     # Wyoming settings
     wyoming_host: str | None = None
@@ -174,6 +180,36 @@ class STTConfig:
     nemotron_model: str = "nvidia/nemotron-speech-streaming-en-0.6b"
     nemotron_chunk_ms: int = 160
     nemotron_device: str = "cuda"
+
+    # WebSocket streaming settings
+    websocket_endpoint: str | None = None
+    streaming_chunk_ms: int = 160
+    streaming_stability_window: int = 2
+    streaming_min_stable_chars: int = 10
+
+
+@dataclass
+class StreamingPipelineConfig:
+    """Configuration for the streaming voice pipeline.
+
+    Controls early LLM start and ASR/LLM overlap behavior.
+
+    Attributes:
+        enabled: Whether to use streaming pipeline (vs batch).
+        llm_start_threshold: Minimum stable chars before starting LLM.
+        llm_abort_on_change: Abort LLM if transcript changes significantly.
+        change_threshold: Characters of change to trigger abort.
+        phrase_min_chars: Minimum phrase length for TTS.
+        phrase_max_chars: Maximum phrase length before force-flush.
+        phrase_timeout_ms: Flush phrase after this delay.
+    """
+    enabled: bool = False
+    llm_start_threshold: int = 50
+    llm_abort_on_change: bool = False
+    change_threshold: int = 20
+    phrase_min_chars: int = 30
+    phrase_max_chars: int = 150
+    phrase_timeout_ms: int = 400
 
 
 @dataclass

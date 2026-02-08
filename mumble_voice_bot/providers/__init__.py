@@ -5,6 +5,14 @@ from mumble_voice_bot.providers.openai_llm import OpenAIChatLLM
 from mumble_voice_bot.providers.wyoming_stt import WyomingSTT, WyomingSTTSync
 from mumble_voice_bot.providers.wyoming_tts import WyomingTTS, WyomingTTSSync
 
+# WebSocket streaming ASR
+from mumble_voice_bot.providers.streaming_asr import (
+    LocalStreamingASR,
+    StreamingASR,
+    StreamingASRConfig,
+    StreamingASRMetrics,
+)
+
 # Streaming ASR providers (optional dependencies)
 try:
     from mumble_voice_bot.providers.sherpa_nemotron import SherpaNemotronASR, SherpaNemotronConfig
@@ -28,6 +36,11 @@ __all__ = [
     "WyomingSTTSync",
     "WyomingTTS",
     "WyomingTTSSync",
+    # WebSocket streaming ASR
+    "StreamingASR",
+    "StreamingASRConfig",
+    "StreamingASRMetrics",
+    "LocalStreamingASR",
     # Streaming ASR (may be None if dependencies not installed)
     "SherpaNemotronASR",
     "SherpaNemotronConfig",

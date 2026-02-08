@@ -21,6 +21,22 @@ class STTResult:
     confidence: float | None = None
 
 
+@dataclass
+class PartialSTTResult:
+    """Partial result from streaming speech-to-text.
+
+    Attributes:
+        text: The current partial transcript.
+        stable_text: Text that is unlikely to change.
+        is_final: Whether this is the final result (end of utterance).
+        timestamp: Relative timestamp in seconds from stream start.
+    """
+    text: str
+    stable_text: str = ""
+    is_final: bool = False
+    timestamp: float = 0.0
+
+
 class STTProvider(ABC):
     """Abstract base class for Speech-to-Text providers.
 
@@ -76,6 +92,41 @@ class STTProvider(ABC):
             STTResult containing the transcribed text.
         """
         pass
+
+    async def transcribe_streaming(
+        self,
+        audio_stream: AsyncIterator[bytes],
+        sample_rate: int = 16000,
+        sample_width: int = 2,
+        channels: int = 1,
+        language: str | None = None,
+    ) -> AsyncIterator[PartialSTTResult]:
+        """Transcribe streaming audio with partial results.
+
+        This is the preferred method for low-latency ASR. It yields
+        partial results as audio is processed, allowing the LLM to
+        start generating before the user finishes speaking.
+
+        Args:
+            audio_stream: Async iterator yielding audio chunks.
+            sample_rate: Audio sample rate in Hz.
+            sample_width: Bytes per sample.
+            channels: Number of audio channels.
+            language: Optional language hint.
+
+        Yields:
+            PartialSTTResult with current transcript and stability info.
+        """
+        # Default implementation: collect all audio and return single result
+        # Subclasses should override for true streaming
+        result = await self.transcribe_stream(
+            audio_stream, sample_rate, sample_width, channels, language
+        )
+        yield PartialSTTResult(
+            text=result.text,
+            stable_text=result.text,
+            is_final=True,
+        )
 
     @abstractmethod
     async def is_available(self) -> bool:
