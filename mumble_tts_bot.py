@@ -430,6 +430,8 @@ class MumbleVoiceBot:
         nemotron_device: str = "cuda",
         # Staleness configuration
         max_response_staleness: float = 5.0,
+        # Barge-in configuration
+        barge_in_enabled: bool = True,
         # Soul configuration
         soul_config=None,  # SoulConfig object with themed fallbacks
     ):
@@ -458,6 +460,9 @@ class MumbleVoiceBot:
 
         # Response staleness settings
         self.max_response_staleness = max_response_staleness  # skip responses older than this (seconds)
+        
+        # Barge-in settings
+        self.barge_in_enabled = barge_in_enabled  # allow users to interrupt bot
 
         # Pending transcriptions (for accumulating long utterances)
         self.pending_text = {}  # user_id -> accumulated text
@@ -1004,14 +1009,14 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         # When bot speaks, users' microphones pick up the audio and send it back
         # This causes the bot to transcribe its own TTS output as user speech
         if self._speaking.is_set():
-            # Barge-in detection: if user speaks VERY loudly while bot is speaking,
+            # Barge-in detection: if enabled and user speaks VERY loudly while bot is speaking,
             # trigger interruption via TurnController (sets is_cancelled flag)
-            # Use 3x threshold to avoid false positives from feedback
-            rms = pcm_rms(sound_chunk.pcm)
-            barge_in_threshold = self.asr_threshold * 3  # Much higher threshold for barge-in
-            if self.turn_controller and rms > barge_in_threshold:
-                if self.turn_controller.request_barge_in():
-                    logger.info(f"Barge-in triggered by {user_name} (RMS={rms} > {barge_in_threshold})")
+            if self.barge_in_enabled:
+                rms = pcm_rms(sound_chunk.pcm)
+                barge_in_threshold = self.asr_threshold * 3  # Much higher threshold for barge-in
+                if self.turn_controller and rms > barge_in_threshold:
+                    if self.turn_controller.request_barge_in():
+                        logger.info(f"Barge-in triggered by {user_name} (RMS={rms} > {barge_in_threshold})")
             return  # Don't buffer audio while speaking
 
         rms = pcm_rms(sound_chunk.pcm)
@@ -1723,6 +1728,9 @@ def main():
     # Staleness settings
     max_response_staleness = (config.bot.max_response_staleness if config else None) or 5.0
 
+    # Barge-in settings (default False - bot talks over everyone)
+    barge_in_enabled = config.bot.barge_in_enabled if config else False
+
     # TTS device - allow override from config for memory-constrained GPUs
     tts_device_config = (config.tts.device if config else None) or "auto"
     if args.device != 'auto':
@@ -1765,6 +1773,7 @@ def main():
         nemotron_chunk_ms=nemotron_chunk_ms,
         nemotron_device=nemotron_device,
         max_response_staleness=max_response_staleness,
+        barge_in_enabled=barge_in_enabled,
         soul_config=config.soul_config if config else None,
     )
 

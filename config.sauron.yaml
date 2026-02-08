@@ -34,6 +34,7 @@ bot:
   asr_threshold: 2000
   conversation_timeout: 300
   max_response_staleness: 15.0  # Skip responses older than this (seconds)
+  barge_in_enabled: false  # Bot talks over everyone without interruption
 
 # Model storage paths
 models:

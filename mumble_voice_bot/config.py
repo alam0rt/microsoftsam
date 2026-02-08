@@ -126,6 +126,8 @@ class PipelineBotConfig:
         conversation_timeout: Seconds before conversation history is cleared.
         max_response_staleness: Skip responses older than this (seconds).
                                Increase if TTS is being skipped due to slow LLM.
+        barge_in_enabled: Allow users to interrupt the bot mid-speech.
+                         When False, bot talks over everyone without interruption.
     """
     wake_word: str | None = None
     silence_threshold_ms: int = 1500
@@ -134,6 +136,7 @@ class PipelineBotConfig:
     enable_conversation: bool = True
     conversation_timeout: float = 300.0  # 5 minutes
     max_response_staleness: float = 5.0  # Skip responses older than this
+    barge_in_enabled: bool = False  # Disabled by default - bot talks over everyone
 
 
 @dataclass
