@@ -91,6 +91,8 @@ class OpenAIChatLLM(LLMProvider):
         # Get the appropriate tool formatter for this model
         self._tool_formatter = get_tool_formatter(model)
         self._is_openai_tools = isinstance(self._tool_formatter, OpenAIToolFormatter)
+        formatter_name = "OpenAI" if self._is_openai_tools else "LFM2.5"
+        logger.info(f"Using {formatter_name} tool formatter for model: {model}")
     
     @property
     def tool_formatter(self) -> ToolFormatter:

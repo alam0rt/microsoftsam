@@ -54,10 +54,6 @@ logger = get_logger(__name__)
 try:
     from mumble_voice_bot.config import load_config
     from mumble_voice_bot.providers.openai_llm import OpenAIChatLLM
-    from mumble_voice_bot.interfaces.tool_formatter import (
-        OpenAIToolFormatter,
-        LFM25ToolFormatter,
-    )
     LLM_AVAILABLE = True
 except ImportError as e:
     LLM_AVAILABLE = False
@@ -779,24 +775,6 @@ class MumbleVoiceBot:
             for key, value in voice_prompt.items()
         }
 
-    def _get_tool_formatter(self, model: str):
-        """Select the appropriate tool formatter based on model name.
-        
-        Different LLMs require different tool calling formats:
-        - LFM2.5: Uses <|tool_call_start|>...<|tool_call_end|> special tokens
-        - Most others: Use OpenAI-style `tools` parameter
-        """
-        model_lower = model.lower()
-        
-        # LFM2.5 models use custom format (via system prompt, not API parameter)
-        if 'lfm' in model_lower or 'liquid' in model_lower:
-            print(f"[LLM] Using LFM2.5 tool formatter for model: {model}")
-            return LFM25ToolFormatter()
-        
-        # Default to OpenAI-style tool calling
-        print(f"[LLM] Using OpenAI tool formatter for model: {model}")
-        return OpenAIToolFormatter()
-
     def _init_llm(
         self,
         endpoint: str = None,
@@ -854,9 +832,6 @@ class MumbleVoiceBot:
         # Always load system prompt with personality if personality is set
         final_system_prompt = final_system_prompt or self._load_system_prompt(personality=personality)
 
-        # Select appropriate tool formatter based on model
-        tool_formatter = self._get_tool_formatter(final_model)
-
         self.llm = OpenAIChatLLM(
             endpoint=final_endpoint,
             model=final_model,
@@ -868,7 +843,6 @@ class MumbleVoiceBot:
             top_p=final_top_p,
             top_k=final_top_k,
             repetition_penalty=final_repetition_penalty,
-            tool_formatter=tool_formatter,
         )
         extra_info = []
         if final_max_tokens:
