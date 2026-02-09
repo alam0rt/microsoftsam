@@ -1329,6 +1329,15 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             self.soul_config = new_soul
             self._current_soul_name = soul_name
 
+            # Update Mumble username to match the new soul
+            if self.mumble and self.mumble.is_ready():
+                try:
+                    self.mumble.users.myself.update_comment(f"Soul: {new_soul.name}")
+                    # Note: Mumble doesn't allow renaming after connection,
+                    # but we update the comment to show the current soul
+                except Exception as e:
+                    logger.debug(f"Could not update Mumble comment: {e}")
+
             # Clear conversation history and restore preserved messages
             self.channel_history = []
             if preserved_messages:
@@ -2562,7 +2571,9 @@ def main():
     # Mumble settings
     host = args.host or (config.mumble.host if config else None) or 'localhost'
     port = args.port or (config.mumble.port if config else None) or 64738
-    user = args.user or (config.mumble.user if config else None) or 'VoiceBot'
+    # User name priority: CLI arg > config mumble.user > soul name > fallback
+    soul_name_for_user = config.soul_config.name if (config and config.soul_config) else None
+    user = args.user or (config.mumble.user if config else None) or soul_name_for_user or 'VoiceBot'
     password = args.password or (config.mumble.password if config else None) or ''
     channel = args.channel or (config.mumble.channel if config else None)
 
