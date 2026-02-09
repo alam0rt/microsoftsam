@@ -32,25 +32,33 @@ llm:
   max_tokens: 150
 
 # Event-driven responses (bypass LLM, go direct to TTS)
-on:
-  # First time a user speaks
+responses:
+  # First time a user speaks - casual Aussie greeting
   user_first_speech:
     - "Hey {user}!"
     - "Oh hey, {user}. What's up?"
     - "G'day {user}."
+    - "Oi {user}! How's it going?"
+    - "{user}! Good to see ya."
   
   # When processing a question
   thinking:
     - "Hmm..."
     - "Let me think..."
     - "Uhh..."
+    - "Yeah, so..."
+    - "Right..."
   
   # When LLM is taking too long
   still_thinking:
     - "Still thinking..."
     - "One sec..."
+    - "Gimme a moment..."
+    - "Bear with me..."
   
   # When interrupted
   interrupted:
     - "Oh, sorry."
     - "Go ahead."
+    - "Yeah?"
+    - "What's up?"

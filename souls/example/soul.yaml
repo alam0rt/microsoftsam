@@ -79,7 +79,7 @@ fallbacks:
 # Event-driven responses (bypass LLM, go direct to TTS)
 # Use {user} placeholder for the username
 # Set to null or empty list to disable an event
-on:
+responses:
   # First time a user speaks this session
   user_first_speech:
     - "Hey {user}!"

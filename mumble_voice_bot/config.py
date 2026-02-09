@@ -588,8 +588,9 @@ def load_soul_config(
     )
 
     # Build events config (event-driven TTS responses)
-    # Can be under "events" or "on" key for nicer YAML
-    events_data = config_data.get("events", config_data.get("on", {}))
+    # NOTE: "on" in YAML is parsed as boolean True, so we check for True as well
+    # Can be under "events", "responses", or boolean True (from "on:" in YAML)
+    events_data = config_data.get("events", config_data.get("responses", config_data.get(True, {})))
     default_events = SoulEvents()
     events = SoulEvents(
         user_first_speech=events_data.get("user_first_speech", default_events.user_first_speech),

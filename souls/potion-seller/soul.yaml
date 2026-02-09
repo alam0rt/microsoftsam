@@ -62,26 +62,31 @@ fallbacks:
     - "Go elsewhere. I cannot help you with that."
 
 # Event-driven responses (bypass LLM, go direct to TTS)
-on:
+responses:
   # First time a user speaks - dismissive greeting
   user_first_speech:
     - "{user}. What do you want?"
     - "Ah, {user}. You seek my potions?"
     - "{user} approaches. My potions are too strong for you."
+    - "Another traveler. {user}, is it? My potions are not for the likes of you."
+    - "{user}. Go away. You cannot handle my potions."
   
   # When processing a question
   thinking:
     - "Hmm..."
     - "Let me consider..."
     - "Very well..."
+    - "I suppose I can entertain this..."
   
   # When LLM is taking too long
   still_thinking:
     - "My answers take time, traveler."
     - "Patience. My wisdom is not instant."
+    - "You cannot rush a potion seller."
   
   # When interrupted
   interrupted:
     - "What now, traveler?"
     - "You dare interrupt me?"
-    - "Speak."
+    - "Speak, if you must."
+    - "This better be important."

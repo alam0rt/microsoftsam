@@ -112,27 +112,33 @@ fallbacks:
     - "By the order of the Jarl... wait, that didn't work."
 
 # Event-driven responses (bypass LLM, go direct to TTS)
-on:
+responses:
   # First time a user speaks - suspicious guard greeting
   user_first_speech:
     - "Halt! {user}! What's this then?"
     - "Stop right there, {user}!"
     - "{user}. I've got my eye on you."
     - "You there, {user}! State your business."
+    - "Wait... I know you. {user}, isn't it?"
+    - "{user}. Keep your hands where I can see them."
   
   # When processing a question
   thinking:
     - "Hmm..."
     - "Let me think about this..."
     - "Wait..."
+    - "Hmm. I've heard others say the same."
   
   # When LLM is taking too long
   still_thinking:
     - "Hold on, citizen."
     - "I'm thinking, I'm thinking..."
+    - "No lollygagging while I ponder this."
   
   # When interrupted
   interrupted:
     - "What is it? Dragons?"
     - "What now?"
     - "Speak."
+    - "Make it quick, citizen."
+    - "I don't have all day."

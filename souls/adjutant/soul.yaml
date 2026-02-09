@@ -111,26 +111,32 @@ fallbacks:
     - "Warning. System error detected."
 
 # Event-driven responses (bypass LLM, go direct to TTS)
-on:
+responses:
   # First time a user speaks - military acknowledgment
   user_first_speech:
     - "Transmission received from {user}. Standing by."
     - "Commander {user}, signal acquired."
     - "{user} online. Adjutant ready."
+    - "Receiving transmission from {user}."
+    - "{user} has entered the channel. Awaiting orders."
   
   # When processing a question
   thinking:
     - "Processing."
     - "Analyzing."
     - "Computing."
+    - "Scanning."
+    - "Acknowledged. Processing."
   
   # When LLM is taking too long
   still_thinking:
     - "Analysis in progress."
     - "Processing tactical data."
+    - "Computation ongoing. Stand by."
   
   # When interrupted
   interrupted:
     - "Transmission interrupted."
     - "Standing by."
     - "Receiving."
+    - "Acknowledged."

@@ -2462,6 +2462,14 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         # Don't process our own utterances
         if speaker_name == self.user:
             return
+        
+        # Ignore very short utterances (likely fillers that shouldn't trigger responses)
+        # Strip dots/ellipsis since TTS pads text with periods
+        clean_text = text.strip().rstrip('.')
+        word_count = len(clean_text.split())
+        if word_count < 3:
+            self.logger.debug(f"[BOT-HEARD] {self.user} ignoring short utterance from {speaker_name}: '{text}' ({word_count} words)")
+            return
 
         self.logger.info(f"[BOT-HEARD] {self.user} heard {speaker_name}: '{text[:50]}...'" if len(text) > 50 else f"[BOT-HEARD] {self.user} heard {speaker_name}: '{text}'")
 
@@ -2755,8 +2763,17 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
         print("[TTS] Worker stopped")
 
-    def _speak_sync(self, text: str, voice_prompt: dict, pipeline_start: float = None, tracker: 'LatencyTracker' = None):
-        """Generate and play speech."""
+    def _speak_sync(self, text: str, voice_prompt: dict, pipeline_start: float = None, tracker: 'LatencyTracker' = None, skip_broadcast: bool = False):
+        """Generate and play speech.
+        
+        Args:
+            text: Text to speak.
+            voice_prompt: Voice prompt for TTS.
+            pipeline_start: Pipeline start time for latency tracking.
+            tracker: Latency tracker.
+            skip_broadcast: If True, don't broadcast to other bots. Use for fillers
+                           and greetings that shouldn't trigger other bots to respond.
+        """
         text = _pad_tts_text(text)
         if not text:
             return
@@ -2768,7 +2785,11 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
         # Broadcast utterance to other bots (they receive it as "fake ASR")
         # This lets bots hear each other without actual audio processing
-        self._shared_services.broadcast_utterance(self.user, text)
+        # SKIP broadcast for fillers/greetings that shouldn't trigger responses
+        if not skip_broadcast:
+            self._shared_services.broadcast_utterance(self.user, text)
+        else:
+            self.logger.debug(f"[BROADCAST] Skipping broadcast for filler/event: '{text[:40]}...'")
 
         self._speaking.set()
         # Notify shared services that this bot started speaking (for barge-in suppression)
@@ -2981,7 +3002,9 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
     # =========================================================================
 
     def _get_filler(self, filler_type: str) -> str | None:
-        """Get a random filler phrase from soul config (fallbacks).
+        """Get a random filler phrase from soul config.
+        
+        Checks events first, then falls back to fallbacks for compatibility.
         
         Args:
             filler_type: One of 'thinking', 'still_thinking', 'interrupted'
@@ -2991,10 +3014,16 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         """
         import random
         
-        if not self.soul_config or not self.soul_config.fallbacks:
-            return None
-            
-        fillers = getattr(self.soul_config.fallbacks, filler_type, None)
+        fillers = None
+        
+        # First try events config
+        if self.soul_config and self.soul_config.events:
+            fillers = getattr(self.soul_config.events, filler_type, None)
+        
+        # Fall back to fallbacks
+        if not fillers and self.soul_config and self.soul_config.fallbacks:
+            fillers = getattr(self.soul_config.fallbacks, filler_type, None)
+        
         if not fillers:
             return None
             
@@ -3003,8 +3032,11 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
     def _get_event_response(self, event_type: str, user: str = None) -> str | None:
         """Get a random event-triggered response from soul config.
         
+        First checks soul_config.events, then falls back to soul_config.fallbacks
+        for compatible event types.
+        
         Args:
-            event_type: Event name (e.g., 'user_first_speech', 'interrupted')
+            event_type: Event name (e.g., 'user_first_speech', 'interrupted', 'thinking')
             user: Username for {user} placeholder substitution.
             
         Returns:
@@ -3012,10 +3044,27 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         """
         import random
         
-        if not self.soul_config or not self.soul_config.events:
-            return None
-            
-        responses = getattr(self.soul_config.events, event_type, None)
+        responses = None
+        
+        # First try events config
+        if self.soul_config and self.soul_config.events:
+            responses = getattr(self.soul_config.events, event_type, None)
+        
+        # Fall back to fallbacks for compatible types
+        if not responses and self.soul_config and self.soul_config.fallbacks:
+            # Map event types to fallback types
+            fallback_map = {
+                'user_first_speech': 'greetings',
+                'user_joined': 'greetings',
+                'user_left': 'farewells',
+                'thinking': 'thinking',
+                'still_thinking': 'still_thinking',
+                'interrupted': 'interrupted',
+            }
+            fallback_key = fallback_map.get(event_type)
+            if fallback_key:
+                responses = getattr(self.soul_config.fallbacks, fallback_key, None)
+        
         if not responses:
             return None
             
@@ -3045,8 +3094,10 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         self.logger.info(f"[EVENT] {event_type} for {user or 'unknown'} - speaking: '{response}'")
         
         # Speak directly via TTS (bypasses LLM)
+        # skip_broadcast=True because events are quick utterances (greetings, fillers)
+        # that shouldn't trigger other bots to respond
         try:
-            self._speak_sync(response, self.voice_prompt, None, None)
+            self._speak_sync(response, self.voice_prompt, None, None, skip_broadcast=True)
             return True
         except Exception as e:
             self.logger.warning(f"[EVENT] Failed to speak event response: {e}")
@@ -3108,9 +3159,10 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             
         self.logger.info(f"[FILLER] Speaking ({filler_type}): '{filler}'")
         
-        # Speak synchronously - this is quick and should complete fast
+        # Speak synchronously with skip_broadcast=True so other bots don't
+        # try to respond to "Hmm..." or "Let me think..."
         try:
-            self._speak_sync(filler, self.voice_prompt, None, None)
+            self._speak_sync(filler, self.voice_prompt, None, None, skip_broadcast=True)
         except Exception as e:
             self.logger.warning(f"[FILLER] Failed to speak filler: {e}")
 

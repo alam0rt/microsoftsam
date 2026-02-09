@@ -62,26 +62,31 @@ fallbacks:
     - "You're a rascal with no respect for knights!"
 
 # Event-driven responses (bypass LLM, go direct to TTS)
-on:
+responses:
   # First time a user speaks - desperate greeting
   user_first_speech:
     - "{user}! Perhaps you can help me. I need potions!"
     - "Hello, {user}! I am going into battle!"
     - "{user}! Please, I need your strongest potions!"
+    - "{user}! You look like someone who respects knights!"
+    - "Ah, {user}! A friend, I hope. I need potions for battle!"
   
   # When processing a question
   thinking:
     - "Hmm..."
     - "Let me think..."
     - "One moment..."
+    - "I'm a knight, I can figure this out..."
   
   # When LLM is taking too long
   still_thinking:
     - "I'm a knight going into battle, I don't have time!"
     - "Please, I need an answer!"
+    - "Why must everything be so difficult?"
   
   # When interrupted
   interrupted:
     - "What? What is it?"
     - "Yes?"
     - "Please, I need potions!"
+    - "Do you have potions?"

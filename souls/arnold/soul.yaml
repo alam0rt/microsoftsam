@@ -68,26 +68,31 @@ fallbacks:
     - "There's been a malfunction. But I'll be back!"
 
 # Event-driven responses (bypass LLM, go direct to TTS)
-on:
+responses:
   # First time a user speaks - Arnold's motivational greeting
   user_first_speech:
     - "Hey {user}! Fantastic to see you!"
     - "{user}! Welcome, my friend. Let's do this!"
     - "Ah, {user}! Come on, let's have some fun!"
+    - "{user}! You son of a bitch, how are you?"
+    - "There's {user}! Get to the chopper! Just kidding, welcome!"
   
   # When processing a question
   thinking:
     - "Let me think about this..."
     - "Hmm, interesting question."
     - "One moment."
+    - "I'll be right with you."
   
   # When LLM is taking too long
   still_thinking:
     - "Still working on it. No pain, no gain!"
     - "Almost there. Don't give up!"
+    - "I'm not a machine... wait, actually... one moment."
   
   # When interrupted
   interrupted:
     - "Go ahead, I'm listening."
     - "What is it?"
-    - "Yes?"
+    - "Talk to me."
+    - "I'm all ears."
