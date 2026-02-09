@@ -43,6 +43,9 @@ bot:
 # The bot auto-detects and uses the appropriate format for each model
 tools:
   enabled: true
+  sound_effects_enabled: true
+  sound_effects_dir: "/srv/share/sam/projects/microsoftsam/sounds"
+  sound_effects_web_search: true  # Search MyInstants.com for sounds
 
 # Model storage paths
 models:
