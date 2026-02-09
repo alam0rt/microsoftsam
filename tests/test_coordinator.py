@@ -251,3 +251,178 @@ llm:
         config_file = tmp_path / "nonexistent.yaml"
 
         assert is_multi_persona_config(config_file) is False
+
+
+# --- Event Journal Tests ---
+
+
+class TestEventJournal:
+    """Tests for SharedBotServices event journal."""
+
+    def test_log_event_basic(self):
+        """Test logging a basic event."""
+        from mumble_tts_bot import SharedBotServices
+        import time
+
+        services = SharedBotServices()
+        services.log_event("user_message", "sam", "hello world")
+
+        journal = services.get_journal_for_llm()
+        assert len(journal) == 1
+        assert journal[0]["event"] == "user_message"
+        assert journal[0]["speaker"] == "sam"
+        assert journal[0]["content"] == "hello world"
+        assert "seconds_ago" in journal[0]
+        assert journal[0]["seconds_ago"] >= 0
+
+    def test_log_event_types(self):
+        """Test different event types are stored correctly."""
+        from mumble_tts_bot import SharedBotServices
+
+        services = SharedBotServices()
+        services.log_event("user_message", "sam", "hello")
+        services.log_event("bot_message", "Zapp", "Greetings!")
+        services.log_event("user_joined", "bob")
+        services.log_event("user_left", "alice")
+        services.log_event("text_message", "charlie", "hi from chat")
+
+        journal = services.get_journal_for_llm()
+        assert len(journal) == 5
+        
+        events = [e["event"] for e in journal]
+        assert events == ["user_message", "bot_message", "user_joined", "user_left", "text_message"]
+
+    def test_journal_max_entries(self):
+        """Test journal respects max entries limit."""
+        from mumble_tts_bot import SharedBotServices
+
+        services = SharedBotServices()
+        # Default max is 50, add 60 events
+        for i in range(60):
+            services.log_event("user_message", "sam", f"message {i}")
+
+        journal = services.get_journal_for_llm()
+        assert len(journal) <= 50
+
+    def test_get_recent_messages_for_llm(self):
+        """Test formatting messages for LLM context."""
+        from mumble_tts_bot import SharedBotServices
+
+        services = SharedBotServices()
+        services.log_event("user_message", "sam", "hello")
+        services.log_event("bot_message", "Zapp", "Greetings, puny human!")
+        services.log_event("user_message", "sam", "how are you")
+        services.log_event("bot_message", "Zapp", "I am magnificent!")
+
+        messages = services.get_recent_messages_for_llm()
+        
+        assert len(messages) == 4
+        assert messages[0] == {"role": "user", "content": "sam: hello"}
+        assert messages[1] == {"role": "assistant", "content": "Greetings, puny human!"}
+        assert messages[2] == {"role": "user", "content": "sam: how are you"}
+        assert messages[3] == {"role": "assistant", "content": "I am magnificent!"}
+
+    def test_get_recent_messages_includes_text_messages(self):
+        """Test text chat messages are included in LLM context."""
+        from mumble_tts_bot import SharedBotServices
+
+        services = SharedBotServices()
+        services.log_event("user_message", "sam", "voice hello")
+        services.log_event("text_message", "bob", "text hello")
+        services.log_event("bot_message", "Zapp", "Hello both!")
+
+        messages = services.get_recent_messages_for_llm()
+        
+        assert len(messages) == 3
+        assert messages[0] == {"role": "user", "content": "sam: voice hello"}
+        assert messages[1] == {"role": "user", "content": "bob (text): text hello"}
+        assert messages[2] == {"role": "assistant", "content": "Hello both!"}
+
+    def test_get_recent_messages_excludes_join_leave(self):
+        """Test join/leave events are not in message list (but are in full journal)."""
+        from mumble_tts_bot import SharedBotServices
+
+        services = SharedBotServices()
+        services.log_event("user_joined", "sam")
+        services.log_event("user_message", "sam", "hello")
+        services.log_event("user_left", "bob")
+
+        messages = services.get_recent_messages_for_llm()
+        assert len(messages) == 1  # Only the user_message
+        
+        journal = services.get_journal_for_llm()
+        assert len(journal) == 3  # All events in full journal
+
+    def test_get_recent_messages_max_limit(self):
+        """Test message limit is respected."""
+        from mumble_tts_bot import SharedBotServices
+
+        services = SharedBotServices()
+        for i in range(30):
+            services.log_event("user_message", "sam", f"message {i}")
+
+        messages = services.get_recent_messages_for_llm(max_messages=10)
+        assert len(messages) == 10
+        # Should be the most recent 10
+        assert messages[-1]["content"] == "sam: message 29"
+
+    def test_journal_seconds_ago(self):
+        """Test seconds_ago is calculated correctly."""
+        from mumble_tts_bot import SharedBotServices
+        import time
+
+        services = SharedBotServices()
+        services.log_event("user_message", "sam", "first")
+        time.sleep(0.1)  # 100ms
+        services.log_event("user_message", "sam", "second")
+
+        journal = services.get_journal_for_llm()
+        assert len(journal) == 2
+        # Second message should have smaller seconds_ago than first
+        assert journal[1]["seconds_ago"] <= journal[0]["seconds_ago"]
+
+    def test_journal_empty(self):
+        """Test empty journal returns empty lists."""
+        from mumble_tts_bot import SharedBotServices
+
+        services = SharedBotServices()
+        
+        assert services.get_journal_for_llm() == []
+        assert services.get_recent_messages_for_llm() == []
+
+    def test_journal_thread_safety(self):
+        """Test journal is thread-safe."""
+        from mumble_tts_bot import SharedBotServices
+        import threading
+
+        services = SharedBotServices()
+        errors = []
+
+        def writer():
+            try:
+                for i in range(100):
+                    services.log_event("user_message", "writer", f"msg {i}")
+            except Exception as e:
+                errors.append(e)
+
+        def reader():
+            try:
+                for _ in range(100):
+                    services.get_journal_for_llm()
+                    services.get_recent_messages_for_llm()
+            except Exception as e:
+                errors.append(e)
+
+        threads = [
+            threading.Thread(target=writer),
+            threading.Thread(target=writer),
+            threading.Thread(target=reader),
+            threading.Thread(target=reader),
+        ]
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(errors) == 0

@@ -592,30 +592,33 @@ class SharedBotServices:
             return self._speaking_count > 0
 
     # =========================================================================
-    # Event Journal - Shared timeline for LLM context
     # =========================================================================
-    # Tracks all utterances and events so bots have awareness of conversation flow.
-    # This is included in LLM context for more natural responses.
+    # Event Journal - Unified conversation context for all bots
+    # =========================================================================
+    # The journal is the single source of truth for conversation history.
+    # All utterances, joins, and events are recorded here with timestamps.
+    # This replaces per-bot channel_history - bots read from the shared journal.
 
-    def log_event(self, event_type: str, speaker: str = None, text: str = None, details: str = None) -> None:
+    def log_event(self, event_type: str, speaker: str = None, content: str = None) -> None:
         """Log an event to the shared journal.
 
         Args:
-            event_type: Type of event (e.g., "said", "joined", "started_speaking", "stopped_speaking")
+            event_type: Type of event:
+                - "user_message": A user (human) said something
+                - "bot_message": A bot said something  
+                - "user_joined": User joined the channel
+                - "user_left": User left the channel
+                - "bot_joined": Bot connected to channel
             speaker: Who triggered the event (bot name or user name)
-            text: What was said (for utterance events)
-            details: Additional details
+            content: The message content (for message events)
         """
         now = time.time()
-        relative_time = now - self._start_time
         
         entry = {
-            "time": now,
-            "relative": relative_time,
             "event": event_type,
             "speaker": speaker,
-            "text": text,
-            "details": details,
+            "content": content,
+            "time": now,
         }
         
         with self._journal_lock:
@@ -627,54 +630,106 @@ class SharedBotServices:
             if len(self._event_journal) > self._journal_max_entries:
                 self._event_journal = self._event_journal[-self._journal_max_entries:]
 
-    def get_event_journal_for_context(self, exclude_speaker: str = None, max_events: int = 20) -> str:
-        """Get a formatted event journal for inclusion in LLM context.
+    def get_journal_for_llm(self, max_events: int = 30) -> list[dict]:
+        """Get the journal formatted for LLM context.
+        
+        Returns a list of event dicts with seconds_ago instead of absolute time.
+        This is the primary way bots get conversation context.
 
         Args:
-            exclude_speaker: Optionally exclude events from this speaker (e.g., the bot asking)
             max_events: Maximum number of events to include
 
         Returns:
-            Formatted string describing recent events for LLM context.
+            List of event dicts like:
+            [
+                {"event": "user_joined", "speaker": "sam", "seconds_ago": 120},
+                {"event": "user_message", "speaker": "sam", "content": "hello", "seconds_ago": 60},
+                {"event": "bot_message", "speaker": "Zapp", "content": "Greetings!", "seconds_ago": 55},
+            ]
         """
+        now = time.time()
+        
         with self._journal_lock:
             events = list(self._event_journal)
         
         if not events:
-            return ""
+            return []
         
-        # Filter and limit
-        if exclude_speaker:
-            # Don't exclude utterances, but might exclude some meta events
-            pass  # Actually, keep all for now - bot should know what it said
-        
+        # Take most recent events
         events = events[-max_events:]
         
-        # Format as a natural timeline
-        lines = []
-        lines.append("## Recent conversation timeline:")
-        
+        # Convert to LLM-friendly format with seconds_ago
+        result = []
         for e in events:
-            relative_secs = e["relative"]
-            mins = int(relative_secs // 60)
-            secs = int(relative_secs % 60)
-            timestamp = f"+{mins}:{secs:02d}"
-            
-            if e["event"] == "said":
-                lines.append(f"[{timestamp}] {e['speaker']}: \"{e['text']}\"")
-            elif e["event"] == "joined":
-                lines.append(f"[{timestamp}] {e['speaker']} joined the channel")
-            elif e["event"] == "left":
-                lines.append(f"[{timestamp}] {e['speaker']} left the channel")
-            elif e["event"] == "started_speaking":
-                lines.append(f"[{timestamp}] {e['speaker']} started speaking")
-            elif e["event"] == "stopped_speaking":
-                lines.append(f"[{timestamp}] {e['speaker']} stopped speaking")
-            else:
-                detail = f": {e['details']}" if e.get('details') else ""
-                lines.append(f"[{timestamp}] {e['speaker']} {e['event']}{detail}")
+            entry = {
+                "event": e["event"],
+                "speaker": e.get("speaker"),
+                "seconds_ago": int(now - e["time"]),
+            }
+            if e.get("content"):
+                entry["content"] = e["content"]
+            result.append(entry)
         
-        return "\n".join(lines)
+        return result
+
+    def get_recent_messages_for_llm(self, max_messages: int = 20) -> list[dict]:
+        """Get recent messages formatted as OpenAI-style messages.
+        
+        Filters journal to just message events and formats them for the
+        LLM messages array (role: user/assistant, content: ...).
+
+        Args:
+            max_messages: Maximum number of messages to include
+
+        Returns:
+            List of message dicts like:
+            [
+                {"role": "user", "content": "sam: hello"},
+                {"role": "assistant", "content": "Greetings!"},
+            ]
+        """
+        now = time.time()
+        
+        with self._journal_lock:
+            events = list(self._event_journal)
+        
+        # Filter to just message events and format for LLM
+        messages = []
+        for e in events:
+            event_type = e["event"]
+            speaker = e.get('speaker', 'Unknown')
+            content = e.get('content', '')
+            
+            if event_type == "user_message":
+                # Voice message from a user
+                messages.append({
+                    "role": "user",
+                    "content": f"{speaker}: {content}" if speaker else content,
+                    "time": e["time"],
+                })
+            elif event_type == "text_message":
+                # Text chat message from a user
+                messages.append({
+                    "role": "user",
+                    "content": f"{speaker} (text): {content}" if speaker else content,
+                    "time": e["time"],
+                })
+            elif event_type == "bot_message":
+                # Bot spoke
+                messages.append({
+                    "role": "assistant",
+                    "content": content,
+                    "time": e["time"],
+                })
+        
+        # Take most recent
+        messages = messages[-max_messages:]
+        
+        # Remove time field (just used for ordering)
+        for m in messages:
+            del m["time"]
+        
+        return messages
 
     # =========================================================================
     # Utterance Broadcasting (for bot-to-bot communication without ASR)
@@ -692,8 +747,8 @@ class SharedBotServices:
             speaker_name: Name of the bot speaking.
             text: What the bot is saying.
         """
-        # Log to event journal
-        self.log_event("said", speaker_name, text)
+        # Log to event journal as bot_message
+        self.log_event("bot_message", speaker_name, text)
         
         if not hasattr(self, '_utterance_listeners'):
             self._utterance_listeners = []
@@ -1868,20 +1923,17 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             self.channel_history = history[-self.channel_history_max:]
 
     def _build_llm_messages(self, current_speaker: str = None) -> list[dict]:
-        """Build LLM message list from channel history.
+        """Build LLM message list from the shared event journal.
 
         Creates a natural conversation flow where the LLM can see
         what everyone said, not just the current speaker.
 
-        Time and channel context are provided as a system message,
-        not embedded in user content, to avoid the LLM mimicking
-        timestamp formats in its responses.
+        Uses the unified journal from SharedBotServices as the source of truth.
+        Falls back to local channel_history if no shared services (single-bot mode).
         """
         messages = []
-        history = self._get_channel_history()
 
-        # Add time/channel context as a system message (not user message)
-        # This way the LLM knows the context but won't mimic the format
+        # Add time/channel context as a system message
         time_ctx = self._get_time_context()
         channel_ctx = self._get_channel_context()
 
@@ -1890,12 +1942,6 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             context_parts.append(f"Current time: {time_ctx}")
         if channel_ctx:
             context_parts.append(f"Channel: {channel_ctx}")
-        
-        # Add event journal for conversation awareness
-        if self._shared_services:
-            recent_events = self._shared_services.get_event_journal_for_context(max_events=15)
-            if recent_events:
-                context_parts.append(recent_events)
 
         if context_parts:
             messages.append({
@@ -1903,30 +1949,47 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 "content": " | ".join(context_parts)
             })
 
-        # Add recent conversation as context
-        if history:
-            for entry in history:
-                messages.append({
-                    "role": entry["role"],
-                    "content": entry["content"]
-                })
+        # Get conversation history from the shared journal (preferred)
+        # or fall back to local channel_history (single-bot mode)
+        if self._shared_services:
+            # Use the unified journal
+            history = self._shared_services.get_recent_messages_for_llm(max_messages=20)
+            messages.extend(history)
+        else:
+            # Fallback: use local channel history
+            history = self._get_channel_history()
+            if history:
+                for entry in history:
+                    messages.append({
+                        "role": entry["role"],
+                        "content": entry["content"]
+                    })
 
         return messages
 
     def _get_history(self, user_id: int) -> list[dict]:
         """Get conversation history for a user, clearing if stale.
 
-        NOTE: This now returns the shared channel history formatted for the LLM,
+        NOTE: This now returns the shared journal formatted for the LLM,
         not per-user history. The user_id is kept for API compatibility.
         """
         return self._build_llm_messages()
 
     def _add_to_history(self, user_id: int, role: str, content: str, user_name: str = None, include_time: bool = False):
-        """Add a message to conversation history.
+        """Add a message to conversation history via the shared journal.
 
-        NOTE: This now adds to the shared channel history.
+        This is the single entry point for adding messages to context.
+        Logs to the shared journal (multi-bot) or local history (single-bot).
         """
-        self._add_to_channel_history(role, content, user_name)
+        # Log to shared journal if available (multi-bot mode)
+        if self._shared_services:
+            if role == "user":
+                self._shared_services.log_event("user_message", user_name, content)
+            elif role == "assistant":
+                self._shared_services.log_event("bot_message", self.user, content)
+        else:
+            # Fallback to local channel history (single-bot mode)
+            self._add_to_channel_history(role, content, user_name)
 
     async def _generate_response(self, user_id: int, text: str, user_name: str = None) -> str:
         """Generate LLM response, executing any tool calls.
@@ -2310,9 +2373,8 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
             # --- End Speech Filtering ---
 
-            # Log to event journal for multi-bot awareness
-            if self._shared_services:
-                self._shared_services.log_event("said", user_name, text)
+            # NOTE: Don't log to journal here - _add_to_history will do it
+            # when _generate_response is called. This avoids duplicate entries.
 
             # Accumulate text
             current_time = time.time()

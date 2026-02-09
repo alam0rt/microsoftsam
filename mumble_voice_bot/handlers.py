@@ -192,6 +192,9 @@ class PresenceHandler(MumbleEventHandler):
 
             if not was_in_channel:
                 logger.info(f"User {event.name} joined our channel")
+                # Log to journal for multi-bot awareness
+                if hasattr(self._bot, '_shared_services') and self._bot._shared_services:
+                    self._bot._shared_services.log_event("user_joined", event.name)
                 if self._greet_on_join:
                     logger.debug(f"Generating greeting for {event.name}")
                     await self._greet_user(event.name, event.session_id)
@@ -203,6 +206,9 @@ class PresenceHandler(MumbleEventHandler):
 
             if was_in_channel:
                 logger.info(f"User {event.name} left our channel")
+                # Log to journal for multi-bot awareness
+                if hasattr(self._bot, '_shared_services') and self._bot._shared_services:
+                    self._bot._shared_services.log_event("user_left", event.name)
 
     async def on_user_left(self, event: UserLeftEvent) -> None:
         """User disconnected from server."""
@@ -327,6 +333,10 @@ class TextCommandHandler(MumbleEventHandler):
 
         sender_name = event.sender_name or "Someone"
         logger.info(f"Text from {sender_name}: {text}")
+
+        # Log text message to journal for multi-bot awareness
+        if hasattr(self._bot, '_shared_services') and self._bot._shared_services:
+            self._bot._shared_services.log_event("text_message", sender_name, text)
 
         if not self._bot.llm:
             logger.debug("LLM not available - ignoring text message")
