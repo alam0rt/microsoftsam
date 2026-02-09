@@ -1,0 +1,85 @@
+# Multi-Persona Bot Configuration Example
+# This config allows running multiple bot personas that share TTS/STT/LLM resources
+# while maintaining separate identities (voice, personality, conversation history).
+#
+# Usage: python mumble_tts_bot.py --config config.multi-persona.yaml
+#
+# Environment variables can be used with ${VAR_NAME} syntax
+
+# =============================================================================
+# Shared Services Configuration
+# =============================================================================
+# These expensive resources are loaded once and shared across all personas.
+# This saves GPU memory and initialization time.
+
+shared:
+  llm:
+    # OpenAI-compatible endpoint (works with Ollama, vLLM, OpenAI, etc.)
+    endpoint: "http://localhost:11434/v1/chat/completions"
+    model: "llama3.2:3b"
+    api_key: "${LLM_API_KEY}"  # Optional, set via environment
+    timeout: 30.0
+    # temperature: 0.7  # Can be overridden per-persona
+
+  stt:
+    provider: "wyoming"
+    wyoming_host: "localhost"
+    wyoming_port: 10300
+
+  tts:
+    device: "cuda"
+    num_steps: 4
+
+# =============================================================================
+# Persona Definitions
+# =============================================================================
+# Each persona gets their own:
+# - Mumble connection (separate user)
+# - Voice (from soul's ref_audio)
+# - System prompt / personality
+# - Conversation history
+
+personas:
+  # Knight persona - loads from souls/knight/
+  - name: "knight"
+    soul: "knight"  # Loads soul.yaml, personality.md, audio/ from souls/knight/
+    mumble:
+      user: "Sir Reginald"  # Mumble username
+      channel: "Tavern"     # Channel to join (optional)
+    llm_overrides:
+      temperature: 0.7
+    respond_to_other_personas: true  # Can engage in bot-to-bot conversation
+
+  # Potion Seller persona - loads from souls/potion-seller/
+  - name: "seller"
+    soul: "potion-seller"
+    mumble:
+      user: "Potion Seller"
+      channel: "Tavern"
+    llm_overrides:
+      temperature: 0.8
+      max_tokens: 150
+    respond_to_other_personas: true
+
+# =============================================================================
+# Bot-to-Bot Interaction Settings
+# =============================================================================
+# Controls how personas interact with each other to prevent infinite loops
+# and enable natural conversations.
+
+interaction:
+  enable_cross_talk: true        # Allow bots to hear and respond to each other
+  response_delay_ms: 500         # Delay before responding to another bot
+  max_chain_length: 5            # Max consecutive bot-to-bot exchanges
+  cooldown_after_chain_ms: 3000  # Cooldown after max chain is reached
+  ignore_own_audio: true         # Prevent bot from hearing its own TTS output
+
+# =============================================================================
+# Default Mumble Connection Settings
+# =============================================================================
+# These are used as defaults for all personas unless overridden.
+
+mumble:
+  host: "localhost"
+  port: 64738
+  password: null
