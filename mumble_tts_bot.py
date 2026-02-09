@@ -2249,8 +2249,14 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         # Try to respond (with a small delay to let turn-taking work)
         # Use a thread to avoid blocking the broadcast
         def delayed_respond():
+            import random
             import time as time_module
-            time_module.sleep(0.5)  # Small delay for natural turn-taking
+            # Randomize delay so bots don't respond in lockstep
+            delay = 0.3 + random.random() * 0.7  # 0.3-1.0 seconds
+            time_module.sleep(delay)
+            # Check if any bot is speaking (not just us) - yield if so
+            if self._shared_services and self._shared_services.any_bot_speaking():
+                return
             if not self._speaking.is_set():  # Still not speaking
                 self._maybe_respond(user_id, speaker_name, force=True)
 
