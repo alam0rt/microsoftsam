@@ -1025,9 +1025,10 @@ class MumbleVoiceBot:
         self._owns_llm = False
 
         if shared_llm is not None:
-            # Use shared LLM - note: system prompt is set per-request in multi-bot mode
+            # Use shared LLM - store our system prompt to set per-request
             self.llm = shared_llm
-            print("[LLM] Using shared LLM client")
+            self._bot_system_prompt = llm_system_prompt or ""
+            print(f"[LLM] Using shared LLM client (prompt: {len(self._bot_system_prompt)} chars)")
             # Still initialize tools
             if TOOLS_AVAILABLE:
                 self._init_tools()
@@ -1854,6 +1855,11 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         else:
             logger.debug("No tools available for LLM request")
 
+        # Set our system prompt on the shared LLM before each request
+        # This is critical for multi-bot mode where each bot has different personality
+        if hasattr(self, '_bot_system_prompt') and self._bot_system_prompt:
+            self.llm.system_prompt = self._bot_system_prompt
+
         # Tool execution loop
         max_iterations = 5
         iteration = 0
@@ -1932,6 +1938,9 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         """Generate a one-off LLM response without updating history."""
         if not self.llm:
             return ""
+        # Set our system prompt on the shared LLM before each request
+        if hasattr(self, '_bot_system_prompt') and self._bot_system_prompt:
+            self.llm.system_prompt = self._bot_system_prompt
         response = self._run_coro_sync(
             self.llm.chat([{"role": "user", "content": prompt}])
         )
