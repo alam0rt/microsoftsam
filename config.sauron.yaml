@@ -43,8 +43,8 @@ bot:
   echo_filter_enabled: true       # Prevent bot from responding to its own speech
   echo_filter_decay: 30.0         # How long to remember bot outputs (seconds)
   utterance_filter_enabled: true  # Filter out non-meaningful utterances
-  utterance_filter_min_words: 1
-  utterance_filter_min_chars: 3
+  utterance_min_words: 1
+  utterance_min_chars: 3
   turn_prediction_enabled: true   # Adaptive response delays
   turn_prediction_base_delay: 0.3
   turn_prediction_max_delay: 2.0
