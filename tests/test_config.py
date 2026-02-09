@@ -415,6 +415,16 @@ class TestSoulConfig:
         assert isinstance(config.voice, TTSConfig)
         assert isinstance(config.fallbacks, SoulFallbacks)
 
+    def test_talks_to_bots_default_false(self):
+        """Test that talks_to_bots defaults to False."""
+        config = SoulConfig()
+        assert config.talks_to_bots is False
+
+    def test_talks_to_bots_can_be_set_true(self):
+        """Test that talks_to_bots can be set to True."""
+        config = SoulConfig(talks_to_bots=True)
+        assert config.talks_to_bots is True
+
 
 class TestLoadSoulConfig:
     """Test load_soul_config function."""

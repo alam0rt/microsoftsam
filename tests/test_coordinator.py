@@ -426,3 +426,297 @@ class TestEventJournal:
             t.join()
 
         assert len(errors) == 0
+
+
+class TestBotUtteranceHandling:
+    """Tests for bot-to-bot utterance handling and talks_to_bots feature."""
+
+    @pytest.fixture
+    def mock_bot(self):
+        """Create a mock bot with minimal required attributes."""
+        from unittest.mock import MagicMock, AsyncMock
+        import threading
+        from mumble_tts_bot import SharedBotServices
+
+        bot = MagicMock()
+        bot.user = "TestBot"
+        bot.logger = MagicMock()
+        bot._speaking = threading.Event()
+        bot._shared_services = SharedBotServices()
+        bot.pending_text = {}
+        bot.pending_text_time = {}
+        bot.soul_config = None
+        return bot
+
+    @pytest.fixture
+    def soul_config_talks_to_bots(self):
+        """Create a SoulConfig with talks_to_bots enabled."""
+        from mumble_voice_bot.config import SoulConfig
+        return SoulConfig(name="TalkativeBot", talks_to_bots=True)
+
+    @pytest.fixture
+    def soul_config_no_talk(self):
+        """Create a SoulConfig with talks_to_bots disabled (default)."""
+        from mumble_voice_bot.config import SoulConfig
+        return SoulConfig(name="QuietBot", talks_to_bots=False)
+
+    def test_ignores_own_utterances(self, mock_bot):
+        """Test that bot ignores its own broadcast utterances."""
+        from mumble_tts_bot import MumbleVoiceBot
+
+        # Call the method directly on a mock
+        mock_bot.user = "Zapp"
+        MumbleVoiceBot._on_bot_utterance(mock_bot, "Zapp", "Hello!")
+
+        # Should not log anything or process
+        assert "Zapp" not in str(mock_bot.logger.info.call_args_list)
+
+    def test_logs_heard_utterance(self, mock_bot):
+        """Test that hearing another bot is logged."""
+        from mumble_tts_bot import MumbleVoiceBot
+
+        mock_bot.user = "Raf"
+        MumbleVoiceBot._on_bot_utterance(mock_bot, "Zapp", "Greetings!")
+
+        mock_bot.logger.info.assert_called()
+        call_str = str(mock_bot.logger.info.call_args)
+        assert "Heard" in call_str
+        assert "Zapp" in call_str
+
+    def test_no_response_without_talks_to_bots(self, mock_bot, soul_config_no_talk):
+        """Test that bot does not respond when talks_to_bots is False."""
+        from mumble_tts_bot import MumbleVoiceBot
+        import time
+
+        mock_bot.soul_config = soul_config_no_talk
+        mock_bot.user = "Raf"
+
+        MumbleVoiceBot._on_bot_utterance(mock_bot, "Zapp", "Hello Raf!")
+
+        # Should log that we heard it
+        mock_bot.logger.info.assert_called()
+        
+        # Should NOT add to pending_text (no response queued)
+        assert len(mock_bot.pending_text) == 0
+
+    def test_no_response_without_soul_config(self, mock_bot):
+        """Test that bot does not respond when soul_config is None."""
+        from mumble_tts_bot import MumbleVoiceBot
+
+        mock_bot.soul_config = None
+        mock_bot.user = "Raf"
+
+        MumbleVoiceBot._on_bot_utterance(mock_bot, "Zapp", "Hello!")
+
+        # Should NOT add to pending_text
+        assert len(mock_bot.pending_text) == 0
+
+    def test_queues_response_with_talks_to_bots(self, mock_bot, soul_config_talks_to_bots):
+        """Test that bot queues response when talks_to_bots is True."""
+        from mumble_tts_bot import MumbleVoiceBot
+        import time
+
+        mock_bot.soul_config = soul_config_talks_to_bots
+        mock_bot.user = "Raf"
+        mock_bot._speaking.clear()  # Not speaking
+
+        MumbleVoiceBot._on_bot_utterance(mock_bot, "Zapp", "Hello Raf!")
+
+        # Should add to pending_text (response will be attempted)
+        assert len(mock_bot.pending_text) == 1
+        
+        # Check the user_id is derived from speaker name
+        user_id = -hash("Zapp") % 1000000
+        assert user_id in mock_bot.pending_text
+        assert mock_bot.pending_text[user_id] == "Hello Raf!"
+
+    def test_no_response_while_speaking(self, mock_bot, soul_config_talks_to_bots):
+        """Test that bot does not queue response while speaking."""
+        from mumble_tts_bot import MumbleVoiceBot
+
+        mock_bot.soul_config = soul_config_talks_to_bots
+        mock_bot.user = "Raf"
+        mock_bot._speaking.set()  # Currently speaking
+
+        MumbleVoiceBot._on_bot_utterance(mock_bot, "Zapp", "Hello!")
+
+        # Should NOT add to pending_text (we're speaking)
+        assert len(mock_bot.pending_text) == 0
+
+    def test_long_text_truncated_in_log(self, mock_bot):
+        """Test that long utterances are truncated in log messages."""
+        from mumble_tts_bot import MumbleVoiceBot
+
+        mock_bot.user = "Raf"
+        long_text = "A" * 100  # 100 characters
+
+        MumbleVoiceBot._on_bot_utterance(mock_bot, "Zapp", long_text)
+
+        call_str = str(mock_bot.logger.info.call_args)
+        assert "..." in call_str  # Should be truncated
+        assert "A" * 50 in call_str  # First 50 chars
+
+    def test_short_text_not_truncated_in_log(self, mock_bot):
+        """Test that short utterances are not truncated in log."""
+        from mumble_tts_bot import MumbleVoiceBot
+
+        mock_bot.user = "Raf"
+        short_text = "Hello!"
+
+        MumbleVoiceBot._on_bot_utterance(mock_bot, "Zapp", short_text)
+
+        call_str = str(mock_bot.logger.info.call_args)
+        assert "..." not in call_str or "Hello!" in call_str
+
+
+class TestSoulConfigTalksToBots:
+    """Tests for talks_to_bots configuration in SoulConfig."""
+
+    def test_default_is_false(self):
+        """Test that talks_to_bots defaults to False."""
+        from mumble_voice_bot.config import SoulConfig
+
+        config = SoulConfig()
+        assert config.talks_to_bots is False
+
+    def test_can_set_true(self):
+        """Test that talks_to_bots can be set to True."""
+        from mumble_voice_bot.config import SoulConfig
+
+        config = SoulConfig(talks_to_bots=True)
+        assert config.talks_to_bots is True
+
+    def test_load_from_yaml_default(self, tmp_path):
+        """Test loading soul without talks_to_bots defaults to False."""
+        from mumble_voice_bot.config import load_soul_config
+
+        soul_dir = tmp_path / "souls" / "test_soul"
+        soul_dir.mkdir(parents=True)
+        
+        soul_yaml = """
+name: "Test Soul"
+description: "A test soul"
+"""
+        (soul_dir / "soul.yaml").write_text(soul_yaml)
+
+        config = load_soul_config("test_soul", tmp_path / "souls")
+        assert config.talks_to_bots is False
+
+    def test_load_from_yaml_true(self, tmp_path):
+        """Test loading soul with talks_to_bots: true."""
+        from mumble_voice_bot.config import load_soul_config
+
+        soul_dir = tmp_path / "souls" / "chatty_soul"
+        soul_dir.mkdir(parents=True)
+        
+        soul_yaml = """
+name: "Chatty Soul"
+description: "A soul that talks to other bots"
+talks_to_bots: true
+"""
+        (soul_dir / "soul.yaml").write_text(soul_yaml)
+
+        config = load_soul_config("chatty_soul", tmp_path / "souls")
+        assert config.talks_to_bots is True
+
+    def test_load_from_yaml_false(self, tmp_path):
+        """Test loading soul with talks_to_bots: false."""
+        from mumble_voice_bot.config import load_soul_config
+
+        soul_dir = tmp_path / "souls" / "quiet_soul"
+        soul_dir.mkdir(parents=True)
+        
+        soul_yaml = """
+name: "Quiet Soul"
+description: "A soul that does not talk to other bots"
+talks_to_bots: false
+"""
+        (soul_dir / "soul.yaml").write_text(soul_yaml)
+
+        config = load_soul_config("quiet_soul", tmp_path / "souls")
+        assert config.talks_to_bots is False
+
+
+class TestBroadcastUtterance:
+    """Tests for utterance broadcasting between bots."""
+
+    def test_broadcast_logs_to_journal(self):
+        """Test that broadcast_utterance logs to the event journal."""
+        from mumble_tts_bot import SharedBotServices
+
+        services = SharedBotServices()
+        services.broadcast_utterance("Zapp", "Victory is mine!")
+
+        journal = services.get_journal_for_llm()
+        assert len(journal) == 1
+        assert journal[0]["event"] == "bot_message"
+        assert journal[0]["speaker"] == "Zapp"
+        assert journal[0]["content"] == "Victory is mine!"
+
+    def test_broadcast_notifies_listeners(self):
+        """Test that broadcast_utterance notifies registered listeners."""
+        from mumble_tts_bot import SharedBotServices
+
+        services = SharedBotServices()
+        received = []
+
+        def listener(speaker, text):
+            received.append((speaker, text))
+
+        services.register_utterance_listener(listener)
+        services.broadcast_utterance("Raf", "Hey man")
+
+        assert len(received) == 1
+        assert received[0] == ("Raf", "Hey man")
+
+    def test_broadcast_multiple_listeners(self):
+        """Test broadcast notifies multiple listeners."""
+        from mumble_tts_bot import SharedBotServices
+
+        services = SharedBotServices()
+        received1 = []
+        received2 = []
+
+        services.register_utterance_listener(lambda s, t: received1.append((s, t)))
+        services.register_utterance_listener(lambda s, t: received2.append((s, t)))
+        services.broadcast_utterance("Zapp", "Kif!")
+
+        assert received1 == [("Zapp", "Kif!")]
+        assert received2 == [("Zapp", "Kif!")]
+
+    def test_broadcast_listener_error_doesnt_break_others(self):
+        """Test that a failing listener doesn't prevent others from receiving."""
+        from mumble_tts_bot import SharedBotServices
+
+        services = SharedBotServices()
+        received = []
+
+        def bad_listener(speaker, text):
+            raise RuntimeError("I'm broken!")
+
+        def good_listener(speaker, text):
+            received.append((speaker, text))
+
+        services.register_utterance_listener(bad_listener)
+        services.register_utterance_listener(good_listener)
+        
+        # Should not raise, and good listener should still receive
+        services.broadcast_utterance("Zapp", "For glory!")
+
+        assert received == [("Zapp", "For glory!")]
+
+    def test_bot_messages_in_llm_context(self):
+        """Test bot messages appear correctly in LLM context."""
+        from mumble_tts_bot import SharedBotServices
+
+        services = SharedBotServices()
+        services.log_event("user_message", "sam", "Hello bots!")
+        services.broadcast_utterance("Raf", "Hey sam!")
+        services.broadcast_utterance("Zapp", "Greetings, citizen!")
+
+        messages = services.get_recent_messages_for_llm()
+        
+        assert len(messages) == 3
+        assert messages[0] == {"role": "user", "content": "sam: Hello bots!"}
+        assert messages[1] == {"role": "assistant", "content": "Hey sam!"}
+        assert messages[2] == {"role": "assistant", "content": "Greetings, citizen!"}
