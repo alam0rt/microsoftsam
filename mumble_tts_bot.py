@@ -1860,7 +1860,29 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         return response.content
 
     def _run_coro_sync(self, coroutine):
-        """Run an async coroutine from sync code safely."""
+        """Run an async coroutine from sync code safely.
+        
+        This handles the case where we're called from:
+        1. The main thread (no running loop) - use asyncio.run()
+        2. A different thread (event loop running) - use run_coroutine_threadsafe()
+        3. The event loop thread itself - CANNOT block, must use a different approach
+        """
+        # Check if we're in the event loop thread - if so, we can't block
+        if hasattr(self, '_event_loop') and self._event_loop.is_running():
+            current_thread = threading.current_thread()
+            if hasattr(self, '_event_loop_thread') and current_thread == self._event_loop_thread:
+                # We're in the event loop thread - can't block here!
+                # Schedule on a thread pool and wait
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(asyncio.run, coroutine)
+                    return future.result(timeout=35.0)
+            else:
+                # Different thread, use run_coroutine_threadsafe
+                future = asyncio.run_coroutine_threadsafe(coroutine, self._event_loop)
+                return future.result(timeout=35.0)
+        
+        # No event loop or not running - just run directly
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
@@ -2838,10 +2860,13 @@ def run_multi_persona_bot(args):
         )
         bots.append(bot)
 
-    # Start all bots
+    # Start all bots with staggered timing to avoid simultaneous greetings
     print(f"\n[Multi-Persona] Starting {len(bots)} bots...")
-    for bot in bots:
+    for i, bot in enumerate(bots):
         bot.start()
+        # Stagger startup to avoid simultaneous greetings (wait for first bot to greet)
+        if i < len(bots) - 1:
+            time.sleep(5)  # 5 seconds between bot joins
 
     # Print status
     print(f"\n✓ Multi-persona bot running with {len(bots)} bots:")

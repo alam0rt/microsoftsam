@@ -148,7 +148,7 @@ class PresenceHandler(MumbleEventHandler):
                     self._bot.speak(response)
                     return
             except Exception as e:
-                logger.warning(f"LLM channel greeting failed: {e}")
+                logger.warning(f"LLM channel greeting failed: {type(e).__name__}: {e}")
 
         # Fallback greeting
         if len(users) == 1:
