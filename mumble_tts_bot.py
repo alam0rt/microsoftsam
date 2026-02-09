@@ -545,7 +545,7 @@ class MumbleVoiceBot:
 
         # Conversation state - SHARED channel history (not per-user)
         self.channel_history = []  # List of {"role": str, "content": str, "speaker": str, "time": float}
-        self.channel_history_max = config.llm.context_messages  # Configurable short-term memory
+        self.channel_history_max = 20  # Default, can be overridden by config.llm.context_messages
         self.conversation_timeout = 300.0  # 5 minutes - clear history after inactivity
         self.last_activity_time = time.time()
 
@@ -875,6 +875,9 @@ class MumbleVoiceBot:
             final_presence_penalty = config.llm.presence_penalty
             if hasattr(config, 'bot') and config.bot.conversation_timeout:
                 self.conversation_timeout = config.bot.conversation_timeout
+            # Update context window from config
+            if config.llm.context_messages:
+                self.channel_history_max = config.llm.context_messages
 
         # Check environment variables for API key if not set
         if not final_api_key:
