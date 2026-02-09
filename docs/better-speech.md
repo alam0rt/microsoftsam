@@ -775,12 +775,13 @@ class TestEchoFilterIntegration:
 - [x] Add unit tests in `tests/test_conversation_state.py`
 - [ ] Add state to debug/metrics output
 
-## Phase 4: Context Preservation ❌
-- [ ] Modify `_switch_soul()` to accept `preserve_context` parameter
-- [ ] Add `preserve_context_on_switch` config option
-- [ ] Filter system prompts when preserving
-- [ ] Add logging for preserved message count
-- [ ] Add unit tests in `tests/test_context_preservation.py`
+## Phase 4: Context Preservation ✅
+- [x] Modify `_switch_soul()` to accept `preserve_context` parameter
+- [x] Add `preserve_context_on_switch` config option
+- [x] Add `max_preserved_messages` config option
+- [x] Filter system prompts when preserving
+- [x] Add logging for preserved message count
+- [x] Add unit tests in `tests/test_context_preservation.py`
 
 ## Phase 5: Continuous ASR (Future) - Partial
 - [x] Create `ContinuousASRBuffer` class (in conversation_state.py)
