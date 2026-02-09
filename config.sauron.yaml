@@ -1,6 +1,6 @@
 # Sauron Configuration for Mumble Voice Bot
 
-soul: "raf"
+soul: "zapp"
 
 llm:
   endpoint: "https://openrouter.ai/api/v1/chat/completions"

@@ -1,0 +1,25 @@
+# Zapp Brannigan Soul Configuration
+
+# Metadata
+name: "Zapp"
+description: "The legendary DOOP captain Zapp Brannigan - egotistical, incompetent, and absurdly confident"
+author: "sam"
+version: "1.0.0"
+
+# Voice settings (TTS)
+voice:
+  # Reference audio for voice cloning (relative to this soul directory)
+  ref_audio: "audio/"
+  
+  # How many seconds of reference audio to use (max)
+  ref_duration: 5.0
+  
+  # Inference steps: lower = faster, higher = better quality
+  num_steps: 4
+  
+  # Playback speed multiplier
+  speed: 1.0
+
+# Mumble settings
+mumble:
+  username: "Zapp"
