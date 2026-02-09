@@ -2029,7 +2029,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         # NOTE: Don't log assistant messages here - they get logged in broadcast_utterance()
         # to avoid duplication in the journal
 
-    async def _generate_response(self, user_id: int, text: str, user_name: str = None, skip_history_add: bool = False) -> str:
+    async def _generate_response(self, user_id: int, text: str, user_name: str = None) -> str:
         """Generate LLM response, executing any tool calls.
 
         This method implements a tool execution loop:
@@ -2043,20 +2043,16 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             user_id: User session ID
             text: The message text to respond to
             user_name: Name of the speaker
-            skip_history_add: If True, don't add the incoming message to history
-                             (used when responding to bot utterances that are already logged)
         """
         # Check for keyword-based tool triggers first
         # This helps with models that don't reliably use tool calling
         keyword_result = await self._check_keyword_tools(text)
         if keyword_result:
-            if not skip_history_add:
-                self._add_to_history(user_id, "user", text, user_name)
+            self._add_to_history(user_id, "user", text, user_name)
             self._add_to_history(user_id, "assistant", keyword_result)
             return keyword_result
 
-        if not skip_history_add:
-            self._add_to_history(user_id, "user", text, user_name)
+        self._add_to_history(user_id, "user", text, user_name)
 
         # Build messages for LLM
         messages = self._get_history(user_id)
@@ -2143,9 +2139,9 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         logger.warning(f"Tool loop hit max iterations ({max_iterations})")
         return "Sorry, I got stuck in a loop trying to look that up."
 
-    def _generate_response_sync(self, user_id: int, text: str, user_name: str = None, skip_history_add: bool = False) -> str:
+    def _generate_response_sync(self, user_id: int, text: str, user_name: str = None) -> str:
         """Generate LLM response synchronously."""
-        return self._run_coro_sync(self._generate_response(user_id, text, user_name, skip_history_add))
+        return self._run_coro_sync(self._generate_response(user_id, text, user_name))
 
     def _generate_oneoff_response_sync(self, prompt: str) -> str:
         """Generate a one-off LLM response without updating history."""
@@ -2489,48 +2485,45 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         if self._speaking.is_set():
             return
 
-        # Create a fake user_id based on speaker name (negative to avoid collision)
-        user_id = -hash(speaker_name) % 1000000
+        # Look up the speaker's Mumble session ID (treat bots as real users)
+        user_id = self._get_session_id_by_name(speaker_name)
+        user_name = speaker_name
 
-        # Store as pending text and maybe respond
+        # === Same logic as user speech (post-ASR) ===
+        # We have perfect text from broadcast, no ASR needed
+        
+        # Echo filter not needed - bots don't echo each other's speech via audio
+        # Utterance classifier not needed - bot speech is already filtered at source
+        
+        # Store pending text exactly like user speech
         current_time = time.time()
-        self.pending_text[user_id] = text
+        if user_id in self.pending_text:
+            self.pending_text[user_id] += " " + text
+        else:
+            self.pending_text[user_id] = text
         self.pending_text_time[user_id] = current_time
 
-        # Try to respond (with a small delay to let turn-taking work)
-        def delayed_respond():
-            import random
-            import time as time_module
-            # Randomize delay so bots don't respond in lockstep
-            delay = 0.5 + random.random() * 1.5  # 0.5-2.0 seconds
-            self.logger.info(f"[BOT-RESPOND] {self.user} waiting {delay:.1f}s before responding to {speaker_name}")
-            time_module.sleep(delay)
-            
-            # Retry loop: wait for other bots to finish speaking
-            max_wait = 15.0
-            waited = 0.0
-            while waited < max_wait:
-                if self._shared_services.any_bot_speaking():
-                    self.logger.debug(f"[BOT-RESPOND] {self.user} waiting - another bot speaking (waited {waited:.1f}s)")
-                    time_module.sleep(0.5)
-                    waited += 0.5
-                    continue
-                if self._speaking.is_set():
-                    self.logger.debug(f"[BOT-RESPOND] {self.user} waiting - I'm speaking (waited {waited:.1f}s)")
-                    time_module.sleep(0.5)
-                    waited += 0.5
-                    continue
-                # Nobody speaking - try to respond
-                self.logger.info(f"[BOT-RESPOND] {self.user} attempting response to {speaker_name}")
-                # skip_history_add=True because bot_message is already logged by broadcast_utterance
-                self._maybe_respond(user_id, speaker_name, force=True, skip_history_add=True)
-                return
-            
-            self.logger.warning(f"[BOT-RESPOND] {self.user} gave up waiting to respond to {speaker_name} after {max_wait}s")
+        # Respond using normal flow (same as user speech after silence detection)
+        # force=True because we have complete utterance (like silence-triggered response)
+        self._maybe_respond(user_id, user_name, force=True)
 
-        threading.Thread(target=delayed_respond, daemon=True).start()
+    def _get_session_id_by_name(self, name: str) -> int:
+        """Look up a user's Mumble session ID by their name.
+        
+        Args:
+            name: The user/bot name to look up.
+            
+        Returns:
+            Session ID if found, or a consistent positive hash if not found.
+        """
+        if hasattr(self, 'mumble') and self.mumble and hasattr(self.mumble, 'users'):
+            for user in self.mumble.users.values():
+                if user.get('name') == name:
+                    return user['session']
+        # Fallback: consistent positive hash (e.g., bot not yet connected)
+        return hash(name) % 1000000
 
-    def _maybe_respond(self, user_id: int, user_name: str, force: bool = False, tracker: 'LatencyTracker' = None, skip_history_add: bool = False):
+    def _maybe_respond(self, user_id: int, user_name: str, force: bool = False, tracker: 'LatencyTracker' = None):
         """Respond if we have pending text and enough time has passed.
         
         Args:
@@ -2538,7 +2531,6 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             user_name: Name of the speaker.
             force: Force immediate response.
             tracker: Latency tracker.
-            skip_history_add: If True, don't add to history (e.g., bot-to-bot where message already logged).
         """
         if user_id not in self.pending_text:
             return
@@ -2592,9 +2584,8 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
                 self.logger.info(f'Generating response for {user_name}: "{text}"')
                 
-                # Check for first-time speaker event (only for humans, not bots)
-                # Bot-to-bot messages have negative user_id from hash
-                if user_id >= 0 and user_name and self._check_first_time_speaker(user_name):
+                # Check for first-time speaker event
+                if user_name and self._check_first_time_speaker(user_name):
                     # Trigger first speech event - this speaks a greeting
                     if self._trigger_event('user_first_speech', user_name):
                         # If we spoke a greeting, add a small pause before continuing
@@ -2614,7 +2605,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 llm_start = time.time()
 
                 try:
-                    response = self._generate_response_sync(user_id, text, user_name, skip_history_add=skip_history_add)
+                    response = self._generate_response_sync(user_id, text, user_name)
                     llm_time = time.time() - llm_start
                     
                     # Cancel "still thinking" timer - we got the response
