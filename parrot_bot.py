@@ -367,7 +367,7 @@ class ParrotBot:
         self.logger.info(f'ASR ({transcribe_time*1000:.0f}ms): "{text}" [from {user_name}, {duration:.1f}s audio]')
         
         # Clone voice from the user's audio
-        self.logger.debug(f"Cloning {user_name}'s voice...")
+        self.logger.info(f"Cloning {user_name}'s voice...")
         try:
             # Write audio to temp file for voice cloning
             import soundfile as sf
@@ -388,7 +388,7 @@ class ParrotBot:
             
             try:
                 voice_prompt = self.tts.encode_prompt(temp_path, rms=0.01)
-                self.logger.debug("Voice prompt encoded successfully")
+                self.logger.info("Voice prompt encoded, queuing TTS")
             finally:
                 os.unlink(temp_path)
         except Exception as e:
