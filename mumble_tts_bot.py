@@ -511,6 +511,7 @@ class MumbleVoiceBot:
         barge_in_enabled: bool = True,
         # Soul configuration
         soul_config=None,  # SoulConfig object with themed fallbacks
+        soul_name=None,  # Name of the active soul (for tool queries)
         # Tools configuration
         tools_config=None,  # ToolsConfig for tool settings
     ):
@@ -524,7 +525,7 @@ class MumbleVoiceBot:
         self.voices_dir = voices_dir
         self.soul_config = soul_config  # Soul-specific themed responses
         self.tools_config = tools_config  # Tool-specific configuration
-        self._current_soul_name = None  # Track active soul name for tool queries
+        self._current_soul_name = soul_name  # Track active soul name for tool queries
 
         # VAD settings
         self.asr_threshold = asr_threshold
@@ -2450,6 +2451,7 @@ def main():
         max_response_staleness=max_response_staleness,
         barge_in_enabled=barge_in_enabled,
         soul_config=config.soul_config if config else None,
+        soul_name=config.soul if config else None,
         tools_config=config.tools if config else None,
     )
 
