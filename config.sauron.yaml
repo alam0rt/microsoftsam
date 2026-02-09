@@ -21,7 +21,7 @@ tts:
 mumble:
   host: "murmur.middleearth.samlockart.com"
   port: 64738
-  user: "Raf"
+  user: "Zapp"
 
 stt:
   provider: "nemotron_nemo"
