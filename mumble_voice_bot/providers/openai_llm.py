@@ -31,17 +31,30 @@ logger = get_logger(__name__)
 # Debug file logger for LLM requests
 _debug_log_path = Path("logs/debug.log")
 _debug_log_enabled = os.environ.get("LLM_DEBUG_LOG", "1") == "1"
+_debug_start_time = time.monotonic()  # For relative timestamps
 
-def _log_llm_debug(bot_name: str, event: str, data: dict) -> None:
-    """Write debug info to logs/debug.log for LLM request analysis."""
+def _log_llm_debug(bot_name: str, event: str, data: dict, extra_context: dict = None) -> None:
+    """Write debug info to logs/debug.log for LLM request analysis.
+    
+    Args:
+        bot_name: Name of the bot making the request
+        event: Event type (REQUEST, RESPONSE, etc.)
+        data: Main data to log
+        extra_context: Additional context like speaking state, timing, etc.
+    """
     if not _debug_log_enabled:
         return
     try:
         _debug_log_path.parent.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        mono_time = time.monotonic() - _debug_start_time
+        
         with open(_debug_log_path, "a") as f:
             f.write(f"\n{'='*80}\n")
-            f.write(f"[{timestamp}] BOT: {bot_name} | EVENT: {event}\n")
+            f.write(f"[{timestamp}] T+{mono_time:.3f}s | BOT: {bot_name} | EVENT: {event}\n")
+            if extra_context:
+                ctx_str = " | ".join(f"{k}={v}" for k, v in extra_context.items())
+                f.write(f"CONTEXT: {ctx_str}\n")
             f.write(f"{'='*80}\n")
             f.write(json.dumps(data, indent=2, default=str))
             f.write("\n")
@@ -201,6 +214,7 @@ class OpenAIChatLLM(LLMProvider):
         context: dict | None = None,
         tools: list[dict] | None = None,
         bot_name: str | None = None,
+        debug_context: dict | None = None,
     ) -> LLMResponse:
         """Generate a chat completion response.
 
@@ -208,6 +222,8 @@ class OpenAIChatLLM(LLMProvider):
             messages: List of message dicts with 'role' and 'content' keys.
             context: Optional context dict (currently unused, for future extensions).
             tools: Optional list of tool definitions in OpenAI format.
+            bot_name: Name of the bot making the request (for debug logging).
+            debug_context: Extra context for debug logging (speaking state, user info, etc.)
 
         Returns:
             LLMResponse with the generated text, tool calls, and metadata.
@@ -234,7 +250,7 @@ class OpenAIChatLLM(LLMProvider):
             "tools": [t.get("function", {}).get("name") for t in (tools or [])],
             "model": self.model,
             "endpoint": self.endpoint,
-        })
+        }, extra_context=debug_context)
 
         start_time = time.time()
 

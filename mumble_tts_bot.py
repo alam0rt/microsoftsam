@@ -526,6 +526,15 @@ class SharedBotServices:
         # Counter for how many bots are currently speaking (for barge-in suppression)
         self._speaking_count = 0
         self._speaking_lock = threading.Lock()
+        
+        # Event journal - shared timeline of events for LLM context
+        # Each entry: {"time": float, "event": str, "speaker": str, "text": str}
+        self._event_journal: list[dict] = []
+        self._journal_lock = threading.Lock()
+        self._journal_max_entries = 50  # Keep last 50 events
+        self._journal_max_age = 300.0  # 5 minutes
+        self._start_time = time.time()  # Reference time for relative timestamps
+        
         # Response claim tracking - prevents multiple responders to same utterance
         # Maps (user_id, text_hash) -> timestamp when claimed
         # This is like "someone already started responding to this" - no bot identity tracked
@@ -583,6 +592,91 @@ class SharedBotServices:
             return self._speaking_count > 0
 
     # =========================================================================
+    # Event Journal - Shared timeline for LLM context
+    # =========================================================================
+    # Tracks all utterances and events so bots have awareness of conversation flow.
+    # This is included in LLM context for more natural responses.
+
+    def log_event(self, event_type: str, speaker: str = None, text: str = None, details: str = None) -> None:
+        """Log an event to the shared journal.
+
+        Args:
+            event_type: Type of event (e.g., "said", "joined", "started_speaking", "stopped_speaking")
+            speaker: Who triggered the event (bot name or user name)
+            text: What was said (for utterance events)
+            details: Additional details
+        """
+        now = time.time()
+        relative_time = now - self._start_time
+        
+        entry = {
+            "time": now,
+            "relative": relative_time,
+            "event": event_type,
+            "speaker": speaker,
+            "text": text,
+            "details": details,
+        }
+        
+        with self._journal_lock:
+            self._event_journal.append(entry)
+            # Prune old entries
+            cutoff = now - self._journal_max_age
+            self._event_journal = [e for e in self._event_journal if e["time"] > cutoff]
+            # Keep only last N entries
+            if len(self._event_journal) > self._journal_max_entries:
+                self._event_journal = self._event_journal[-self._journal_max_entries:]
+
+    def get_event_journal_for_context(self, exclude_speaker: str = None, max_events: int = 20) -> str:
+        """Get a formatted event journal for inclusion in LLM context.
+
+        Args:
+            exclude_speaker: Optionally exclude events from this speaker (e.g., the bot asking)
+            max_events: Maximum number of events to include
+
+        Returns:
+            Formatted string describing recent events for LLM context.
+        """
+        with self._journal_lock:
+            events = list(self._event_journal)
+        
+        if not events:
+            return ""
+        
+        # Filter and limit
+        if exclude_speaker:
+            # Don't exclude utterances, but might exclude some meta events
+            pass  # Actually, keep all for now - bot should know what it said
+        
+        events = events[-max_events:]
+        
+        # Format as a natural timeline
+        lines = []
+        lines.append("## Recent conversation timeline:")
+        
+        for e in events:
+            relative_secs = e["relative"]
+            mins = int(relative_secs // 60)
+            secs = int(relative_secs % 60)
+            timestamp = f"+{mins}:{secs:02d}"
+            
+            if e["event"] == "said":
+                lines.append(f"[{timestamp}] {e['speaker']}: \"{e['text']}\"")
+            elif e["event"] == "joined":
+                lines.append(f"[{timestamp}] {e['speaker']} joined the channel")
+            elif e["event"] == "left":
+                lines.append(f"[{timestamp}] {e['speaker']} left the channel")
+            elif e["event"] == "started_speaking":
+                lines.append(f"[{timestamp}] {e['speaker']} started speaking")
+            elif e["event"] == "stopped_speaking":
+                lines.append(f"[{timestamp}] {e['speaker']} stopped speaking")
+            else:
+                detail = f": {e['details']}" if e.get('details') else ""
+                lines.append(f"[{timestamp}] {e['speaker']} {e['event']}{detail}")
+        
+        return "\n".join(lines)
+
+    # =========================================================================
     # Utterance Broadcasting (for bot-to-bot communication without ASR)
     # =========================================================================
     # When a bot speaks, it broadcasts the text. Other bots can "hear" this
@@ -598,6 +692,9 @@ class SharedBotServices:
             speaker_name: Name of the bot speaking.
             text: What the bot is saying.
         """
+        # Log to event journal
+        self.log_event("said", speaker_name, text)
+        
         if not hasattr(self, '_utterance_listeners'):
             self._utterance_listeners = []
         for callback in self._utterance_listeners:
@@ -1793,6 +1890,12 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             context_parts.append(f"Current time: {time_ctx}")
         if channel_ctx:
             context_parts.append(f"Channel: {channel_ctx}")
+        
+        # Add event journal for conversation awareness
+        if self._shared_services:
+            recent_events = self._shared_services.get_event_journal_for_context(max_events=15)
+            if recent_events:
+                context_parts.append(recent_events)
 
         if context_parts:
             messages.append({
@@ -2207,6 +2310,10 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
             # --- End Speech Filtering ---
 
+            # Log to event journal for multi-bot awareness
+            if self._shared_services:
+                self._shared_services.log_event("said", user_name, text)
+
             # Accumulate text
             current_time = time.time()
             if user_id in self.pending_text:
@@ -2253,8 +2360,8 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
         self.logger.info(f'Heard (from {speaker_name}): "{text[:50]}..."' if len(text) > 50 else f'Heard (from {speaker_name}): "{text}"')
 
-        # Add to conversation history (as if it was a user message)
-        self._add_to_channel_history("user", text, speaker_name)
+        # NOTE: Don't add to history here - _generate_response will add it
+        # Adding here would cause duplicates in the LLM context
 
         # Store as pending text and maybe respond
         current_time = time.time()
