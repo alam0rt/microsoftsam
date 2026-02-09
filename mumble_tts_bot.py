@@ -907,10 +907,11 @@ def create_shared_services(
             raise RuntimeError(f"Failed to initialize NeMo Nemotron STT ({model})")
         print("[SharedServices] NeMo Nemotron ready!")
     elif stt_provider == "local":
-        # Explicit local Whisper via TTS - no external STT
-        print("[SharedServices] Using local Whisper via TTS (no streaming STT)")
+        # Whisper is deprecated - exit immediately
+        print("[FATAL] Local Whisper STT is deprecated. Use nemotron_nemo or wyoming instead.")
+        sys.exit(1)
     else:
-        raise RuntimeError(f"Unknown STT provider: {stt_provider}. Valid options: wyoming, nemotron_nemo, local")
+        raise RuntimeError(f"Unknown STT provider: {stt_provider}. Valid options: wyoming, nemotron_nemo")
 
     # Initialize LLM
     llm = None
@@ -1207,9 +1208,11 @@ class MumbleVoiceBot:
             print("[STT] Nemotron model ready!")
 
         elif stt_provider == "local":
-            print("[STT] Using local Whisper via LuxTTS")
+            # Whisper is deprecated - exit immediately
+            print("[FATAL] Local Whisper STT is deprecated. Use nemotron_nemo or wyoming instead.")
+            sys.exit(1)
         else:
-            raise RuntimeError(f"Unknown STT provider: {stt_provider}. Valid: wyoming, sherpa_nemotron, nemotron_nemo, local")
+            raise RuntimeError(f"Unknown STT provider: {stt_provider}. Valid: wyoming, sherpa_nemotron, nemotron_nemo")
 
         # Initialize speech filters (echo detection, utterance classification, turn prediction)
         self._init_speech_filters()
@@ -2541,7 +2544,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
                 if response.content:
                     # Speak the response (this will also broadcast it to other bots)
-                    self._speak_sync(response.content)
+                    self._speak_sync(response.content, self.voice_prompt)
 
         t = threading.Thread(target=_respond_after_speaker_done, daemon=True)
         t.start()
