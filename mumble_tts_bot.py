@@ -488,7 +488,7 @@ class SharedBotServices:
 
     Attributes:
         tts: Shared TTS engine (StreamingLuxTTS).
-        stt: Shared STT engine (Wyoming or Nemotron).
+        stt: Shared STT engine (NeMo Nemotron).
         llm: Shared LLM client (OpenAIChatLLM).
         device: Compute device being used.
         voice_prompts: Dict of persona_name -> pre-computed voice tensors.
@@ -864,7 +864,7 @@ def create_shared_services(
     # Initialize STT - NeMo Nemotron is the only supported provider
     if not NEMOTRON_NEMO_AVAILABLE:
         raise RuntimeError("NeMo Nemotron STT required but nemo_toolkit not installed. Install with: pip install nemo_toolkit")
-    
+
     model = nemotron_model or "nvidia/nemotron-speech-streaming-en-0.6b"
     nemo_device = nemotron_device or device
     print(f"[SharedServices] Loading NeMo Nemotron ({model})...")
