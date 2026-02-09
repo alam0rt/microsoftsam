@@ -676,20 +676,28 @@ class SharedBotServices:
         
         return result
 
-    def get_recent_messages_for_llm(self, max_messages: int = 20) -> list[dict]:
+    def get_recent_messages_for_llm(self, max_messages: int = 20, bot_name: str = None) -> list[dict]:
         """Get recent messages formatted as OpenAI-style messages.
         
         Filters journal to just message events and formats them for the
         LLM messages array (role: user/assistant, content: ...).
+        
+        IMPORTANT: In multi-bot mode, only the requesting bot's own messages
+        should be role="assistant". Other bots' messages are role="user" with
+        their name prefixed, just like human users.
 
         Args:
             max_messages: Maximum number of messages to include
+            bot_name: Name of the requesting bot (for multi-bot scenarios).
+                      If provided, only this bot's messages are "assistant".
+                      Other bots' messages become "user" with name prefix.
 
         Returns:
             List of message dicts like:
             [
                 {"role": "user", "content": "sam: hello"},
                 {"role": "assistant", "content": "Greetings!"},
+                {"role": "user", "content": "Zapp: I am Zapp Brannigan!"},
             ]
         """
         with self._journal_lock:
@@ -717,12 +725,21 @@ class SharedBotServices:
                     "time": e["time"],
                 })
             elif event_type == "bot_message":
-                # Bot spoke
-                messages.append({
-                    "role": "assistant",
-                    "content": content,
-                    "time": e["time"],
-                })
+                # Bot spoke - only "assistant" if it's from the requesting bot
+                if bot_name and speaker != bot_name:
+                    # Another bot's message - treat as user message with name prefix
+                    messages.append({
+                        "role": "user",
+                        "content": f"{speaker}: {content}",
+                        "time": e["time"],
+                    })
+                else:
+                    # Our own message or no bot_name specified - it's assistant
+                    messages.append({
+                        "role": "assistant",
+                        "content": content,
+                        "time": e["time"],
+                    })
         
         # Take most recent
         messages = messages[-max_messages:]
@@ -2002,10 +2019,9 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             })
 
         # Get conversation messages from the journal
-        history = self._shared_services.get_recent_messages_for_llm(max_messages=20)
+        # Pass our bot name so other bots' messages appear as "user" role
+        history = self._shared_services.get_recent_messages_for_llm(max_messages=20, bot_name=self.user)
         messages.extend(history)
-
-        return messages
 
         return messages
 

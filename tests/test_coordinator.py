@@ -730,7 +730,7 @@ class TestBroadcastUtterance:
         assert received == [("Zapp", "For glory!")]
 
     def test_bot_messages_in_llm_context(self):
-        """Test bot messages appear correctly in LLM context."""
+        """Test bot messages appear correctly in LLM context without bot_name."""
         from mumble_tts_bot import SharedBotServices
 
         services = SharedBotServices()
@@ -738,9 +738,36 @@ class TestBroadcastUtterance:
         services.broadcast_utterance("Raf", "Hey sam!")
         services.broadcast_utterance("Zapp", "Greetings, citizen!")
 
+        # Without bot_name, all bot messages are "assistant"
         messages = services.get_recent_messages_for_llm()
         
         assert len(messages) == 3
         assert messages[0] == {"role": "user", "content": "sam: Hello bots!"}
         assert messages[1] == {"role": "assistant", "content": "Hey sam!"}
         assert messages[2] == {"role": "assistant", "content": "Greetings, citizen!"}
+
+    def test_bot_messages_multi_bot_context(self):
+        """Test that bots see each other's messages as user messages, not assistant."""
+        from mumble_tts_bot import SharedBotServices
+
+        services = SharedBotServices()
+        services.log_event("user_message", "sam", "Hello bots!")
+        services.broadcast_utterance("Raf", "Hey sam!")
+        services.broadcast_utterance("Zapp", "Greetings, citizen!")
+
+        # From Raf's perspective: only Raf's messages are "assistant"
+        # Zapp's messages should be "user" with name prefix
+        messages_raf = services.get_recent_messages_for_llm(bot_name="Raf")
+        
+        assert len(messages_raf) == 3
+        assert messages_raf[0] == {"role": "user", "content": "sam: Hello bots!"}
+        assert messages_raf[1] == {"role": "assistant", "content": "Hey sam!"}  # Raf's own message
+        assert messages_raf[2] == {"role": "user", "content": "Zapp: Greetings, citizen!"}  # Zapp is another user
+
+        # From Zapp's perspective: only Zapp's messages are "assistant"
+        messages_zapp = services.get_recent_messages_for_llm(bot_name="Zapp")
+        
+        assert len(messages_zapp) == 3
+        assert messages_zapp[0] == {"role": "user", "content": "sam: Hello bots!"}
+        assert messages_zapp[1] == {"role": "user", "content": "Raf: Hey sam!"}  # Raf is another user
+        assert messages_zapp[2] == {"role": "assistant", "content": "Greetings, citizen!"}  # Zapp's own message
