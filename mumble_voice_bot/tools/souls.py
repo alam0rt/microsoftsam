@@ -72,6 +72,14 @@ class SoulsTool(Tool):
             "required": ["action"]
         }
 
+    @property
+    def example_call(self) -> str:
+        return 'souls(action="switch", soul_name="raf")'
+
+    @property
+    def usage_hint(self) -> str:
+        return "Use when asked to switch personality, voice, or character"
+
     def list_souls(self) -> list[dict]:
         """List all available souls with their metadata.
 

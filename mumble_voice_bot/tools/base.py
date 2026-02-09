@@ -86,6 +86,29 @@ class Tool(ABC):
         """
         pass
 
+    @property
+    def example_call(self) -> str | None:
+        """Example of how to call this tool (for LLM prompting).
+        
+        Override to provide a specific example for the LLM.
+        Example: 'sound_effects(action="play", query="airhorn")'
+        
+        Returns:
+            Example call string, or None to auto-generate from parameters.
+        """
+        return None
+
+    @property
+    def usage_hint(self) -> str | None:
+        """Short hint about when to use this tool.
+        
+        Example: "Use when asked to play sounds or sound effects"
+        
+        Returns:
+            Usage hint string, or None if not needed.
+        """
+        return None
+
     @abstractmethod
     async def execute(self, **kwargs: Any) -> str:
         """Execute the tool with given parameters.
@@ -168,8 +191,9 @@ class Tool(ABC):
 
         Returns:
             Tool definition in OpenAI function calling format.
+            Includes extra fields for LLM prompting (example_call, usage_hint).
         """
-        return {
+        schema = {
             "type": "function",
             "function": {
                 "name": self.name,
@@ -177,6 +201,12 @@ class Tool(ABC):
                 "parameters": self.parameters,
             }
         }
+        # Add optional prompting hints (used by some formatters)
+        if self.example_call:
+            schema["function"]["example_call"] = self.example_call
+        if self.usage_hint:
+            schema["function"]["usage_hint"] = self.usage_hint
+        return schema
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(name={self.name!r})"

@@ -140,6 +140,9 @@ class LFM25ToolFormatter(ToolFormatter):
         """Format tools as JSON list for system prompt."""
         # Convert OpenAI format to simpler format for LFM2.5
         lfm_tools = []
+        examples = []
+        hints = []
+        
         for tool in tools:
             if tool.get("type") == "function":
                 func = tool["function"]
@@ -148,21 +151,34 @@ class LFM25ToolFormatter(ToolFormatter):
                     "description": func.get("description", ""),
                     "parameters": func.get("parameters", {}),
                 })
+                
+                # Collect examples and hints from tools
+                if func.get("example_call"):
+                    examples.append(f"<|tool_call_start|>[{func['example_call']}]<|tool_call_end|>")
+                if func.get("usage_hint"):
+                    hints.append(f"- {func['name']}: {func['usage_hint']}")
         
         tool_json = json.dumps(lfm_tools, indent=2)
+        
+        # Build examples section
+        examples_text = "\n".join(f"- {ex}" for ex in examples) if examples else ""
+        hints_text = "\n".join(hints) if hints else ""
         
         # Add explicit instructions for tool use per LFM2.5 format
         prompt_addition = f"""
 
 List of tools: {tool_json}
 
-When you need to use a tool, output your tool call in this exact format:
+IMPORTANT: To use a tool, you MUST output this EXACT format:
 <|tool_call_start|>[function_name(param="value")]<|tool_call_end|>
 
-For example, to switch personality: <|tool_call_start|>[souls(action="switch", soul_name="raf")]<|tool_call_end|>
-For example, to search the web: <|tool_call_start|>[web_search(query="latest news")]<|tool_call_end|>
+Examples:
+{examples_text}
 
-Always use the tool when the user asks to switch personality/soul or search for information."""
+When to use tools:
+{hints_text}
+
+CRITICAL: You CANNOT perform tool actions without calling the tool first. Do NOT just say you're doing something - actually call the tool!"""
         
         return FormattedTools(system_prompt_addition=prompt_addition)
     

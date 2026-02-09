@@ -65,6 +65,14 @@ class WebSearchTool(Tool):
             "required": ["query"]
         }
 
+    @property
+    def example_call(self) -> str:
+        return 'web_search(query="latest news about topic")'
+
+    @property
+    def usage_hint(self) -> str:
+        return "Use when asked to search, look up, or find information online"
+
     async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
         """Execute web search.
 

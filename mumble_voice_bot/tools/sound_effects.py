@@ -152,6 +152,14 @@ class SoundEffectsTool(Tool):
             "required": ["action"],
         }
 
+    @property
+    def example_call(self) -> str:
+        return 'sound_effects(action="play", query="airhorn")'
+
+    @property
+    def usage_hint(self) -> str:
+        return "MUST use when asked to play sounds, sound effects, or meme sounds"
+
     def _build_index(self) -> dict[str, dict]:
         """Build an index of available local/cached sounds.
         
