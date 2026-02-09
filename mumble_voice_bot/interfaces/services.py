@@ -30,7 +30,7 @@ import torch
 
 class PersonaState(Enum):
     """Current state of a bot persona."""
-    
+
     INITIALIZING = auto()  # Loading voice prompt, connecting
     IDLE = auto()          # Connected, waiting for input
     LISTENING = auto()     # Receiving audio from a user
@@ -44,7 +44,7 @@ class PersonaState(Enum):
 @dataclass
 class VoicePrompt:
     """Encoded voice prompt for TTS voice cloning.
-    
+
     Attributes:
         name: Identifier for this voice (e.g., "knight", "potion-seller").
         tensors: The encoded voice tensors for the TTS model.
@@ -55,13 +55,13 @@ class VoicePrompt:
     tensors: dict[str, torch.Tensor]
     ref_audio_path: str | None = None
     ref_duration: float | None = None
-    
+
     def to_device(self, device: str) -> "VoicePrompt":
         """Move all tensors to the specified device.
-        
+
         Args:
             device: Target device ('cuda', 'cpu', 'mps').
-            
+
         Returns:
             New VoicePrompt with tensors on the target device.
         """
@@ -80,7 +80,7 @@ class VoicePrompt:
 @dataclass
 class ConversationMessage:
     """A single message in the conversation history.
-    
+
     Attributes:
         role: Message role ('system', 'user', 'assistant', 'tool').
         content: Message content.
@@ -98,10 +98,10 @@ class ConversationMessage:
 @dataclass
 class PersonaIdentity:
     """Core identity configuration for a bot persona.
-    
+
     This is the lightweight, serializable identity that defines who
     the persona is, separate from runtime state.
-    
+
     Attributes:
         name: Unique identifier for this persona.
         display_name: Human-readable name (shown in Mumble).
@@ -116,7 +116,7 @@ class PersonaIdentity:
     system_prompt: str | None = None
     mumble_user: str | None = None
     mumble_channel: str | None = None
-    
+
     @property
     def effective_mumble_user(self) -> str:
         """Get the Mumble username to use."""
@@ -126,9 +126,9 @@ class PersonaIdentity:
 @dataclass
 class PersonaConfig:
     """Full configuration for a bot persona.
-    
+
     Extends PersonaIdentity with voice and behavior settings.
-    
+
     Attributes:
         identity: Core identity configuration.
         voice_prompt: Encoded voice for TTS (loaded at runtime).
@@ -152,31 +152,31 @@ class PersonaConfig:
 @runtime_checkable
 class MumbleClientProtocol(Protocol):
     """Protocol for Mumble client operations.
-    
+
     This allows us to mock the Mumble client in tests.
     """
-    
+
     def start(self) -> None:
         """Start the Mumble connection."""
         ...
-    
+
     def stop(self) -> None:
         """Stop the Mumble connection."""
         ...
-    
+
     def is_ready(self) -> bool:
         """Check if connected and ready."""
         ...
-    
+
     def set_receive_sound(self, receive: bool) -> None:
         """Enable or disable audio reception."""
         ...
-    
+
     @property
     def sound_output(self) -> Any:
         """Get the sound output interface."""
         ...
-    
+
     @property
     def my_channel(self) -> Any:
         """Get the bot's current channel."""
@@ -186,10 +186,10 @@ class MumbleClientProtocol(Protocol):
 @dataclass
 class Persona:
     """Runtime state for a single bot persona.
-    
+
     This combines the static configuration with runtime state like
     conversation history, current state, and the Mumble connection.
-    
+
     Attributes:
         config: The persona's configuration.
         state: Current runtime state.
@@ -204,44 +204,44 @@ class Persona:
     mumble_client: Any = None  # pymumble.Mumble instance
     last_activity_time: float = 0.0
     current_turn_id: int = 0
-    
+
     @property
     def name(self) -> str:
         """Get the persona's unique identifier."""
         return self.config.identity.name
-    
+
     @property
     def display_name(self) -> str:
         """Get the persona's display name."""
         return self.config.identity.display_name
-    
+
     @property
     def voice_prompt(self) -> VoicePrompt | None:
         """Get the persona's voice prompt."""
         return self.config.voice_prompt
-    
+
     @property
     def system_prompt(self) -> str | None:
         """Get the persona's system prompt."""
         return self.config.identity.system_prompt
-    
+
     def add_message(self, message: ConversationMessage) -> None:
         """Add a message to the conversation history.
-        
+
         Automatically trims history to max_history_messages.
         """
         self.conversation_history.append(message)
         max_messages = self.config.max_history_messages
         if len(self.conversation_history) > max_messages:
             self.conversation_history = self.conversation_history[-max_messages:]
-    
+
     def clear_history(self) -> None:
         """Clear the conversation history."""
         self.conversation_history.clear()
-    
+
     def get_messages_for_llm(self) -> list[dict[str, str]]:
         """Convert conversation history to LLM message format.
-        
+
         Returns:
             List of dicts with 'role' and 'content' keys.
         """
@@ -253,7 +253,7 @@ class Persona:
 
 class TTSServiceProtocol(Protocol):
     """Protocol for TTS service operations."""
-    
+
     def generate_speech(
         self,
         text: str,
@@ -261,17 +261,17 @@ class TTSServiceProtocol(Protocol):
         num_steps: int = 4,
     ) -> torch.Tensor:
         """Generate speech audio from text.
-        
+
         Args:
             text: Text to synthesize.
             voice_prompt: Voice to use for synthesis.
             num_steps: Number of diffusion steps.
-            
+
         Returns:
             Audio tensor.
         """
         ...
-    
+
     def generate_speech_streaming(
         self,
         text: str,
@@ -279,12 +279,12 @@ class TTSServiceProtocol(Protocol):
         num_steps: int = 4,
     ) -> AsyncIterator[torch.Tensor]:
         """Generate speech audio in streaming chunks.
-        
+
         Args:
             text: Text to synthesize.
             voice_prompt: Voice to use for synthesis.
             num_steps: Number of diffusion steps.
-            
+
         Yields:
             Audio tensor chunks.
         """
@@ -293,18 +293,18 @@ class TTSServiceProtocol(Protocol):
 
 class STTServiceProtocol(Protocol):
     """Protocol for STT service operations."""
-    
+
     async def transcribe(
         self,
         audio_data: bytes,
         sample_rate: int = 16000,
     ) -> str:
         """Transcribe audio to text.
-        
+
         Args:
             audio_data: Raw PCM audio bytes.
             sample_rate: Audio sample rate in Hz.
-            
+
         Returns:
             Transcribed text.
         """
@@ -313,7 +313,7 @@ class STTServiceProtocol(Protocol):
 
 class LLMServiceProtocol(Protocol):
     """Protocol for LLM service operations."""
-    
+
     async def chat(
         self,
         messages: list[dict[str, str]],
@@ -321,17 +321,17 @@ class LLMServiceProtocol(Protocol):
         **kwargs: Any,
     ) -> str:
         """Generate a chat response.
-        
+
         Args:
             messages: Conversation history.
             system_prompt: System prompt to use.
             **kwargs: Additional parameters (temperature, max_tokens, etc).
-            
+
         Returns:
             Generated response text.
         """
         ...
-    
+
     async def chat_stream(
         self,
         messages: list[dict[str, str]],
@@ -339,12 +339,12 @@ class LLMServiceProtocol(Protocol):
         **kwargs: Any,
     ) -> AsyncIterator[str]:
         """Generate a chat response with streaming.
-        
+
         Args:
             messages: Conversation history.
             system_prompt: System prompt to use.
             **kwargs: Additional parameters.
-            
+
         Yields:
             Response text chunks.
         """
@@ -354,10 +354,10 @@ class LLMServiceProtocol(Protocol):
 @dataclass
 class SharedServices:
     """Container for shared, expensive resources.
-    
+
     These services are instantiated once and shared across all personas.
     This saves GPU memory and initialization time.
-    
+
     Attributes:
         tts: Text-to-speech service.
         stt: Speech-to-text service.
@@ -370,21 +370,21 @@ class SharedServices:
     llm: Any  # LLMProvider implementation
     device: str = "cuda"
     voice_prompts: dict[str, VoicePrompt] = field(default_factory=dict)
-    
+
     def get_voice_prompt(self, name: str) -> VoicePrompt | None:
         """Get a voice prompt by name.
-        
+
         Args:
             name: Voice prompt identifier.
-            
+
         Returns:
             VoicePrompt if found, None otherwise.
         """
         return self.voice_prompts.get(name)
-    
+
     def register_voice_prompt(self, voice_prompt: VoicePrompt) -> None:
         """Register a voice prompt for later use.
-        
+
         Args:
             voice_prompt: The voice prompt to register.
         """
@@ -397,67 +397,67 @@ StateChangeCallback = Callable[[Persona, PersonaState, PersonaState], None]
 
 class PersonaManager(ABC):
     """Abstract base class for managing multiple bot personas.
-    
+
     Implementations of this class coordinate multiple personas,
     routing audio and managing turn-taking between them.
     """
-    
+
     @abstractmethod
     def add_persona(self, persona: Persona) -> None:
         """Add a persona to be managed.
-        
+
         Args:
             persona: The persona to add.
         """
         pass
-    
+
     @abstractmethod
     def remove_persona(self, name: str) -> Persona | None:
         """Remove a persona by name.
-        
+
         Args:
             name: The persona's unique identifier.
-            
+
         Returns:
             The removed persona, or None if not found.
         """
         pass
-    
+
     @abstractmethod
     def get_persona(self, name: str) -> Persona | None:
         """Get a persona by name.
-        
+
         Args:
             name: The persona's unique identifier.
-            
+
         Returns:
             The persona, or None if not found.
         """
         pass
-    
+
     @abstractmethod
     def list_personas(self) -> list[Persona]:
         """List all managed personas.
-        
+
         Returns:
             List of all personas.
         """
         pass
-    
+
     @abstractmethod
     async def start_all(self) -> None:
         """Start all personas (connect to Mumble)."""
         pass
-    
+
     @abstractmethod
     async def stop_all(self) -> None:
         """Stop all personas (disconnect from Mumble)."""
         pass
-    
+
     @abstractmethod
     def on_state_change(self, callback: StateChangeCallback) -> None:
         """Register a callback for persona state changes.
-        
+
         Args:
             callback: Function called with (persona, old_state, new_state).
         """
@@ -467,10 +467,10 @@ class PersonaManager(ABC):
 @dataclass
 class InteractionConfig:
     """Configuration for bot-to-bot interactions.
-    
+
     Controls how personas interact with each other to prevent
     infinite loops and enable natural conversations.
-    
+
     Attributes:
         enable_cross_talk: Allow bots to hear and respond to each other.
         response_delay_ms: Delay before responding to another bot (ms).
@@ -488,7 +488,7 @@ class InteractionConfig:
 @dataclass
 class MultiPersonaConfig:
     """Top-level configuration for multi-persona bot deployment.
-    
+
     Attributes:
         personas: List of persona configurations.
         shared: Configuration for shared services.

@@ -9,9 +9,6 @@ Tests cover:
 - Environment variable expansion
 """
 
-import os
-import tempfile
-from pathlib import Path
 from textwrap import dedent
 
 import pytest

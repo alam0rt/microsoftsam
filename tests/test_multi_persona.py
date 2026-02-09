@@ -10,7 +10,7 @@ Tests cover:
 """
 
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 import torch
@@ -28,7 +28,6 @@ from mumble_voice_bot.interfaces.services import (
     StateChangeCallback,
     VoicePrompt,
 )
-
 
 # --- VoicePrompt Tests ---
 
