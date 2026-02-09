@@ -363,6 +363,7 @@ class ToolsConfig:
         sound_effects_auto_play: Allow LLM to proactively play sounds.
         sound_effects_web_search: Allow searching MyInstants.com for sounds.
         sound_effects_cache: Cache downloaded sounds locally.
+        sound_effects_verify_ssl: Verify SSL certs for web requests (disable if cert issues).
     """
     enabled: bool = True
     max_iterations: int = 5
@@ -378,6 +379,7 @@ class ToolsConfig:
     sound_effects_auto_play: bool = True  # Allow LLM to proactively play sounds
     sound_effects_web_search: bool = True  # Allow searching MyInstants.com
     sound_effects_cache: bool = True  # Cache downloaded sounds locally
+    sound_effects_verify_ssl: bool = True  # Verify SSL certs (disable for systems with cert issues)
 
 
 @dataclass

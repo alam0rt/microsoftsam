@@ -66,6 +66,7 @@ class SoundEffectsTool(Tool):
         enable_web_search: bool = True,
         cache_web_sounds: bool = True,
         request_timeout: float = 10.0,
+        verify_ssl: bool = True,
     ):
         """Initialize the sound effects tool.
 
@@ -77,6 +78,7 @@ class SoundEffectsTool(Tool):
             enable_web_search: If True, can search MyInstants.com for sounds.
             cache_web_sounds: If True, cache downloaded sounds locally.
             request_timeout: Timeout for web requests in seconds.
+            verify_ssl: If False, disable SSL certificate verification (use for systems with cert issues).
         """
         self.sounds_dir = Path(sounds_dir)
         self.sounds_dir.mkdir(parents=True, exist_ok=True)
@@ -86,6 +88,7 @@ class SoundEffectsTool(Tool):
         self.enable_web_search = enable_web_search
         self.cache_web_sounds = cache_web_sounds
         self.request_timeout = request_timeout
+        self.verify_ssl = verify_ssl
         self._sound_index: dict[str, dict] | None = None
         
         # Web search cache (in-memory, for recent searches)
@@ -295,10 +298,18 @@ class SoundEffectsTool(Tool):
         
         try:
             import aiohttp
+            import ssl
             
             search_url = MYINSTANTS_SEARCH_URL.format(query=quote_plus(query))
             
-            async with aiohttp.ClientSession(headers=REQUEST_HEADERS) as session:
+            # Create SSL context (disable verification if configured)
+            ssl_context = None if self.verify_ssl else ssl.create_default_context()
+            if not self.verify_ssl:
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+            
+            connector = aiohttp.TCPConnector(ssl=ssl_context)
+            async with aiohttp.ClientSession(headers=REQUEST_HEADERS, connector=connector) as session:
                 async with session.get(search_url, timeout=aiohttp.ClientTimeout(total=self.request_timeout)) as response:
                     if response.status != 200:
                         logger.warning(f"MyInstants search failed: {response.status}")
@@ -404,8 +415,16 @@ class SoundEffectsTool(Tool):
         """
         try:
             import aiohttp
+            import ssl
             
-            async with aiohttp.ClientSession(headers=REQUEST_HEADERS) as session:
+            # Create SSL context (disable verification if configured)
+            ssl_context = None if self.verify_ssl else ssl.create_default_context()
+            if not self.verify_ssl:
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+            
+            connector = aiohttp.TCPConnector(ssl=ssl_context)
+            async with aiohttp.ClientSession(headers=REQUEST_HEADERS, connector=connector) as session:
                 async with session.get(page_url, timeout=aiohttp.ClientTimeout(total=self.request_timeout)) as response:
                     if response.status != 200:
                         return None
@@ -453,6 +472,7 @@ class SoundEffectsTool(Tool):
         
         try:
             import aiohttp
+            import ssl
             
             # Generate a safe filename
             slug = sound_info.get("slug", "")
@@ -471,8 +491,15 @@ class SoundEffectsTool(Tool):
                 logger.debug(f"Sound already cached: {filename}")
                 return str(filepath)
             
+            # Create SSL context (disable verification if configured)
+            ssl_context = None if self.verify_ssl else ssl.create_default_context()
+            if not self.verify_ssl:
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+            
             # Download the file
-            async with aiohttp.ClientSession(headers=REQUEST_HEADERS) as session:
+            connector = aiohttp.TCPConnector(ssl=ssl_context)
+            async with aiohttp.ClientSession(headers=REQUEST_HEADERS, connector=connector) as session:
                 async with session.get(audio_url, timeout=aiohttp.ClientTimeout(total=self.request_timeout)) as response:
                     if response.status != 200:
                         logger.error(f"Failed to download sound: {response.status}")

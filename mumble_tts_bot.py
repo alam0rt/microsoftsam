@@ -974,6 +974,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 sample_rate=48000,  # Mumble uses 48kHz
                 enable_web_search=getattr(self.tools_config, 'sound_effects_web_search', True),
                 cache_web_sounds=getattr(self.tools_config, 'sound_effects_cache', True),
+                verify_ssl=getattr(self.tools_config, 'sound_effects_verify_ssl', True),
             )
             self.tools.register(sound_effects_tool)
             web_status = "with web search" if getattr(self.tools_config, 'sound_effects_web_search', True) else "local only"

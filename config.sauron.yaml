@@ -46,6 +46,7 @@ tools:
   sound_effects_enabled: true
   sound_effects_dir: "/srv/share/sam/projects/microsoftsam/sounds"
   sound_effects_web_search: true  # Search MyInstants.com for sounds
+  sound_effects_verify_ssl: false  # Disable SSL verification (cert issues on server)
 
 # Model storage paths
 models:
