@@ -523,6 +523,24 @@ class SharedBotServices:
         self.voice_prompts: dict[str, dict] = {}
         # Shared echo filter - all bots add their TTS output here
         self.echo_filter = EchoFilter(decay_time=5.0)
+        # Counter for how many bots are currently speaking (for barge-in suppression)
+        self._speaking_count = 0
+        self._speaking_lock = threading.Lock()
+    
+    def bot_started_speaking(self) -> None:
+        """Called when a bot starts speaking."""
+        with self._speaking_lock:
+            self._speaking_count += 1
+    
+    def bot_stopped_speaking(self) -> None:
+        """Called when a bot stops speaking."""
+        with self._speaking_lock:
+            self._speaking_count = max(0, self._speaking_count - 1)
+    
+    def any_bot_speaking(self) -> bool:
+        """Check if any bot in this shared group is speaking."""
+        with self._speaking_lock:
+            return self._speaking_count > 0
     
     def load_voice(self, name: str, audio_path: str, voices_dir: str = "voices") -> dict:
         """Load and cache a voice prompt.
@@ -727,6 +745,7 @@ class MumbleVoiceBot:
         shared_llm=None,  # Shared LLM client
         voice_prompt=None,  # Pre-computed voice prompt (tensors)
         shared_echo_filter=None,  # Shared echo filter for multi-bot
+        shared_services: SharedBotServices = None,  # Full shared services (for speaking coordination)
     ):
         self.host = host
         self.user = user
@@ -764,6 +783,7 @@ class MumbleVoiceBot:
 
         # Multi-bot coordination (shared echo filter so all bots know what all bots said)
         self._shared_echo_filter = shared_echo_filter
+        self._shared_services = shared_services
 
         # Pending transcriptions (for accumulating long utterances)
         self.pending_text = {}  # user_id -> accumulated text
@@ -1869,7 +1889,14 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         if self._speaking.is_set():
             # Barge-in detection: if enabled and user speaks VERY loudly while bot is speaking,
             # trigger interruption via TurnController (sets is_cancelled flag)
+            # IMPORTANT: In multi-bot mode, suppress barge-in entirely when ANY bot is speaking
+            # (including ourselves). The loud audio is likely bot TTS, not a human interrupting.
+            # This prevents: 1) self-interruption from our own echo, 2) bots interrupting each other
             if self.barge_in_enabled:
+                # In multi-bot mode: any bot speaking = ignore (no valid barge-in target)
+                if self._shared_services and self._shared_services.any_bot_speaking():
+                    return  # Bot audio - not a human interruption
+                # Single-bot mode: allow barge-in from humans
                 rms = pcm_rms(sound_chunk.pcm)
                 barge_in_threshold = self.asr_threshold * 3  # Much higher threshold for barge-in
                 if self.turn_controller and rms > barge_in_threshold:
@@ -2295,6 +2322,9 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             self.echo_filter.add_output(text)
 
         self._speaking.set()
+        # Notify shared services that this bot started speaking (for multi-bot barge-in suppression)
+        if self._shared_services:
+            self._shared_services.bot_started_speaking()
 
         # Update conversation state machine
         if self.conversation_state_machine:
@@ -2400,6 +2430,9 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             self.pending_text_time.clear()
 
             self._speaking.clear()
+            # Notify shared services that this bot stopped speaking (for multi-bot barge-in suppression)
+            if self._shared_services:
+                self._shared_services.bot_stopped_speaking()
             # Reset turn controller to idle
             if self.turn_controller:
                 self.turn_controller.reset()
@@ -2801,6 +2834,7 @@ def run_multi_persona_bot(args):
             shared_llm=shared.llm,
             voice_prompt=voice_prompt,
             shared_echo_filter=shared.echo_filter,
+            shared_services=shared,  # Full shared services for speaking coordination
         )
         bots.append(bot)
     
