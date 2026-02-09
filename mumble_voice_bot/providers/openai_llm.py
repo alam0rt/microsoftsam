@@ -249,7 +249,8 @@ class OpenAIChatLLM(LLMProvider):
             logger.warning(f"LLM returned empty content. Message keys: {list(message.keys())}")
             # Some models (e.g., gpt-oss) return reasoning but empty content
             if message.get("reasoning"):
-                logger.warning(f"Model returned reasoning but no content: {message.get('reasoning')[:200]}")
+                reasoning = message.get("reasoning")
+                logger.info(f"LLM reasoning ({len(reasoning)} chars): {reasoning[:500]}{'...' if len(reasoning) > 500 else ''}")
 
         # Parse tool calls - either from structured response or from text
         tool_calls = []
@@ -283,9 +284,13 @@ class OpenAIChatLLM(LLMProvider):
                 content = self._tool_formatter.strip_tool_calls(content)
 
         # Handle models that include <think>...</think> tags (e.g., Qwen3)
-        # Strip out thinking content for cleaner TTS output
+        # Log thinking content for debugging, then strip for cleaner TTS output
         if content and "<think>" in content and "</think>" in content:
             import re
+            think_matches = re.findall(r"<think>(.*?)</think>", content, flags=re.DOTALL)
+            if think_matches:
+                think_content = " | ".join(m.strip()[:500] for m in think_matches)
+                logger.info(f"LLM thinking: {think_content}")
             content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
 
         # Log the response
