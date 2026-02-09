@@ -2,8 +2,6 @@
 
 import time
 
-import pytest
-
 from mumble_voice_bot.speech_filter import EchoFilter, TurnPredictor, UtteranceClassifier
 
 

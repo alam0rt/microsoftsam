@@ -1,7 +1,6 @@
 """Tests for context preservation on soul switch."""
 
-import os
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 

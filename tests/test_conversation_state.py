@@ -1,15 +1,13 @@
 """Tests for conversation state machine."""
 
-import asyncio
 import time
 
 import pytest
 
 from mumble_voice_bot.conversation_state import (
+    ContinuousASRBuffer,
     ConversationState,
     ConversationStateMachine,
-    ContinuousASRBuffer,
-    StateTransition,
 )
 
 

@@ -52,7 +52,7 @@ logger = get_logger(__name__)
 
 # Import LLM components
 try:
-    from mumble_voice_bot.config import load_config, ConfigValidationError
+    from mumble_voice_bot.config import ConfigValidationError, load_config
     from mumble_voice_bot.providers.openai_llm import OpenAIChatLLM
     LLM_AVAILABLE = True
 except ImportError as e:
@@ -96,8 +96,8 @@ except ImportError as e:
 
 # Import speech filtering components (echo filter, utterance classifier, turn predictor)
 try:
-    from mumble_voice_bot.speech_filter import EchoFilter, TurnPredictor, UtteranceClassifier
     from mumble_voice_bot.conversation_state import ConversationState, ConversationStateMachine
+    from mumble_voice_bot.speech_filter import EchoFilter, TurnPredictor, UtteranceClassifier
     SPEECH_FILTER_AVAILABLE = True
 except ImportError as e:
     SPEECH_FILTER_AVAILABLE = False
@@ -1874,7 +1874,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         accumulated_text = self.pending_text.get(user_id, "")
         if self.turn_predictor and not force:
             if not self.turn_predictor.should_respond(accumulated_text, time_since_last):
-                logger.debug(f"Turn predictor: waiting for turn completion")
+                logger.debug("Turn predictor: waiting for turn completion")
                 return
 
         # Respond if forced or if enough time has passed
