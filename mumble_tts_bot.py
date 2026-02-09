@@ -71,23 +71,7 @@ except ImportError as e:
     MULTI_PERSONA_AVAILABLE = False
     logger.debug(f"Multi-persona config not available: {e}")
 
-# Import Wyoming STT provider
-try:
-    from mumble_voice_bot.providers.wyoming_stt import WyomingSTTSync
-    WYOMING_AVAILABLE = True
-except ImportError:
-    WYOMING_AVAILABLE = False
-    logger.warning("Wyoming STT not available. Install with: pip install wyoming")
-
-# Import streaming ASR providers
-try:
-    from mumble_voice_bot.providers.sherpa_nemotron import SherpaNemotronASR, SherpaNemotronConfig
-    SHERPA_NEMOTRON_AVAILABLE = True
-except ImportError:
-    SHERPA_NEMOTRON_AVAILABLE = False
-    SherpaNemotronASR = None
-    SherpaNemotronConfig = None
-
+# Import Nemotron NeMo STT provider (only supported STT backend)
 try:
     from mumble_voice_bot.providers.nemotron_stt import NemotronConfig, NemotronStreamingASR
     NEMOTRON_NEMO_AVAILABLE = True
@@ -95,6 +79,7 @@ except ImportError:
     NEMOTRON_NEMO_AVAILABLE = False
     NemotronStreamingASR = None
     NemotronConfig = None
+    logger.warning("NeMo Nemotron STT not available. Install with: pip install nemo_toolkit")
 
 # Import latency optimization components
 try:
@@ -833,9 +818,6 @@ class SharedBotServices:
 
 def create_shared_services(
     device: str = "auto",
-    stt_provider: str = "local",
-    wyoming_stt_host: str = None,
-    wyoming_stt_port: int = 10300,
     nemotron_model: str = None,
     nemotron_chunk_ms: int = 160,
     nemotron_device: str = None,
@@ -853,9 +835,6 @@ def create_shared_services(
 
     Args:
         device: Compute device ('auto', 'cuda', 'cpu', 'mps').
-        stt_provider: STT provider ('local', 'wyoming', 'nemotron_nemo').
-        wyoming_stt_host: Wyoming STT server host.
-        wyoming_stt_port: Wyoming STT server port.
         nemotron_model: NeMo Nemotron model name.
         nemotron_chunk_ms: Nemotron chunk size in ms.
         nemotron_device: Device for Nemotron (defaults to device).
@@ -882,36 +861,22 @@ def create_shared_services(
     print("[SharedServices] Loading TTS model...")
     tts = StreamingLuxTTS('YatharthS/LuxTTS', device=device, threads=2)
 
-    # Initialize STT - provider is required, no fallback
-    stt = None
-    if stt_provider == "wyoming":
-        if not WYOMING_AVAILABLE:
-            raise RuntimeError("Wyoming STT requested but wyoming package not installed")
-        if not wyoming_stt_host:
-            raise RuntimeError("Wyoming STT requested but no host configured (wyoming_stt_host)")
-        print(f"[SharedServices] Using Wyoming STT at {wyoming_stt_host}:{wyoming_stt_port}")
-        stt = WyomingSTTSync(host=wyoming_stt_host, port=wyoming_stt_port)
-    elif stt_provider == "nemotron_nemo":
-        if not NEMOTRON_NEMO_AVAILABLE:
-            raise RuntimeError("NeMo Nemotron STT requested but nemo_toolkit not installed")
-        model = nemotron_model or "nvidia/nemotron-speech-streaming-en-0.6b"
-        nemo_device = nemotron_device or device
-        print(f"[SharedServices] Loading NeMo Nemotron ({model})...")
-        config = NemotronConfig(
-            model_name=model,
-            chunk_size_ms=nemotron_chunk_ms,
-            device=nemo_device,
-        )
-        stt = NemotronStreamingASR(config)
-        if not asyncio.run(stt.initialize()):
-            raise RuntimeError(f"Failed to initialize NeMo Nemotron STT ({model})")
-        print("[SharedServices] NeMo Nemotron ready!")
-    elif stt_provider == "local":
-        # Whisper is deprecated - exit immediately
-        print("[FATAL] Local Whisper STT is deprecated. Use nemotron_nemo or wyoming instead.")
-        sys.exit(1)
-    else:
-        raise RuntimeError(f"Unknown STT provider: {stt_provider}. Valid options: wyoming, nemotron_nemo")
+    # Initialize STT - NeMo Nemotron is the only supported provider
+    if not NEMOTRON_NEMO_AVAILABLE:
+        raise RuntimeError("NeMo Nemotron STT required but nemo_toolkit not installed. Install with: pip install nemo_toolkit")
+    
+    model = nemotron_model or "nvidia/nemotron-speech-streaming-en-0.6b"
+    nemo_device = nemotron_device or device
+    print(f"[SharedServices] Loading NeMo Nemotron ({model})...")
+    config = NemotronConfig(
+        model_name=model,
+        chunk_size_ms=nemotron_chunk_ms,
+        device=nemo_device,
+    )
+    stt = NemotronStreamingASR(config)
+    if not asyncio.run(stt.initialize()):
+        raise RuntimeError(f"Failed to initialize NeMo Nemotron STT ({model})")
+    print("[SharedServices] NeMo Nemotron ready!")
 
     # Initialize LLM
     llm = None
@@ -966,17 +931,7 @@ class MumbleVoiceBot:
         llm_system_prompt: str = None,
         personality: str = None,
         config_file: str = None,
-        # STT configuration
-        stt_provider: str = "local",  # local, wyoming, sherpa_nemotron, nemotron_nemo
-        wyoming_stt_host: str = None,
-        wyoming_stt_port: int = 10300,
-        # Sherpa Nemotron settings
-        sherpa_encoder: str = None,
-        sherpa_decoder: str = None,
-        sherpa_joiner: str = None,
-        sherpa_tokens: str = None,
-        sherpa_provider: str = "cuda",
-        # NeMo Nemotron settings
+        # NeMo Nemotron STT settings (only supported STT backend)
         nemotron_model: str = "nvidia/nemotron-speech-streaming-en-0.6b",
         nemotron_chunk_ms: int = 160,
         nemotron_device: str = "cuda",
@@ -1156,45 +1111,18 @@ class MumbleVoiceBot:
         else:
             self._load_reference_voice(reference_audio)
 
-        # Initialize STT provider - use shared or create own
-        self.stt_provider = stt_provider
-        self.wyoming_stt = None
+        # Initialize STT - use shared or create own (NeMo Nemotron only)
         self.streaming_stt = None
         self._owns_stt = False
 
         if shared_stt is not None:
             # Use shared STT
-            if hasattr(shared_stt, 'transcribe'):
-                self.wyoming_stt = shared_stt
-            else:
-                self.streaming_stt = shared_stt
+            self.streaming_stt = shared_stt
             print("[STT] Using shared STT engine")
-        elif stt_provider == "wyoming":
-            if not WYOMING_AVAILABLE:
-                raise RuntimeError("Wyoming STT requested but wyoming package not installed")
-            if not wyoming_stt_host:
-                raise RuntimeError("Wyoming STT requested but no host configured (--wyoming-stt-host)")
-            print(f"[STT] Using Wyoming STT at {wyoming_stt_host}:{wyoming_stt_port}")
-            self.wyoming_stt = WyomingSTTSync(host=wyoming_stt_host, port=wyoming_stt_port)
-
-        elif stt_provider == "sherpa_nemotron":
-            if not SHERPA_NEMOTRON_AVAILABLE:
-                raise RuntimeError("Sherpa Nemotron requested but sherpa-onnx not installed")
-            print(f"[STT] Using Sherpa Nemotron (provider={sherpa_provider})")
-            config = SherpaNemotronConfig(
-                encoder_path=sherpa_encoder or "nemotron-encoder.onnx",
-                decoder_path=sherpa_decoder or "nemotron-decoder.onnx",
-                joiner_path=sherpa_joiner or "nemotron-joiner.onnx",
-                tokens_path=sherpa_tokens or "tokens.txt",
-                provider=sherpa_provider,
-            )
-            self.streaming_stt = SherpaNemotronASR(config)
-            if not self.streaming_stt.initialize():
-                raise RuntimeError("Failed to initialize Sherpa Nemotron STT")
-
-        elif stt_provider == "nemotron_nemo":
+        else:
+            # Create own NeMo Nemotron STT
             if not NEMOTRON_NEMO_AVAILABLE:
-                raise RuntimeError("NeMo Nemotron requested but nemo_toolkit not installed")
+                raise RuntimeError("NeMo Nemotron STT required but nemo_toolkit not installed. Install with: pip install nemo_toolkit")
             print(f"[STT] Using NeMo Nemotron ({nemotron_model}, chunk={nemotron_chunk_ms}ms)")
             config = NemotronConfig(
                 model_name=nemotron_model,
@@ -1202,17 +1130,11 @@ class MumbleVoiceBot:
                 device=nemotron_device,
             )
             self.streaming_stt = NemotronStreamingASR(config)
+            self._owns_stt = True
             print("[STT] Pre-loading Nemotron model (this may take a moment)...")
             if not asyncio.run(self.streaming_stt.initialize()):
                 raise RuntimeError(f"Failed to initialize NeMo Nemotron STT ({nemotron_model})")
             print("[STT] Nemotron model ready!")
-
-        elif stt_provider == "local":
-            # Whisper is deprecated - exit immediately
-            print("[FATAL] Local Whisper STT is deprecated. Use nemotron_nemo or wyoming instead.")
-            sys.exit(1)
-        else:
-            raise RuntimeError(f"Unknown STT provider: {stt_provider}. Valid: wyoming, sherpa_nemotron, nemotron_nemo")
 
         # Initialize speech filters (echo detection, utterance classification, turn prediction)
         self._init_speech_filters()
@@ -2373,36 +2295,19 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             tracker.asr_start()
 
         try:
-            # Convert float32 to int16 PCM bytes for external STT providers
+            # Convert float32 to int16 PCM bytes for STT
             audio_16k_int16 = (audio_16k * 32767).astype(np.int16)
             pcm_16k_bytes = audio_16k_int16.tobytes()
 
-            # Select STT provider
-            if self.stt_provider == "wyoming" and self.wyoming_stt:
-                stt_result = self.wyoming_stt.transcribe(
-                    audio_data=pcm_16k_bytes,
-                    sample_rate=16000,
-                    sample_width=2,
-                    channels=1,
-                    language="en",
-                )
-                text = stt_result.text.strip()
-
-            elif self.stt_provider in ("sherpa_nemotron", "nemotron_nemo") and self.streaming_stt:
-                # Use streaming STT provider (synchronous transcription)
-                stt_result = asyncio.run(self.streaming_stt.transcribe(
-                    audio_data=pcm_16k_bytes,
-                    sample_rate=16000,
-                    sample_width=2,
-                    channels=1,
-                    language="en",
-                ))
-                text = stt_result.text.strip()
-
-            else:
-                # Use local Whisper via LuxTTS transcriber
-                result = self.tts.transcriber(audio_16k)
-                text = result.get('text', '').strip()
+            # Use NeMo Nemotron STT (synchronous transcription)
+            stt_result = asyncio.run(self.streaming_stt.transcribe(
+                audio_data=pcm_16k_bytes,
+                sample_rate=16000,
+                sample_width=2,
+                channels=1,
+                language="en",
+            ))
+            text = stt_result.text.strip()
 
             transcribe_time = time.time() - start_time
 
@@ -3482,9 +3387,6 @@ def run_multi_persona_bot(args):
     print("[Multi-Persona] Creating shared services...")
     shared = create_shared_services(
         device=device,
-        stt_provider=stt_config.get("provider", "local"),
-        wyoming_stt_host=stt_config.get("wyoming_host"),
-        wyoming_stt_port=stt_config.get("wyoming_port", 10300),
         nemotron_model=stt_config.get("nemotron_model"),
         nemotron_chunk_ms=stt_config.get("nemotron_chunk_ms", 160),
         nemotron_device=stt_config.get("nemotron_device"),
@@ -3639,12 +3541,6 @@ def main():
     parser.add_argument('--personality', default=None,
                         help='Personality to use (e.g., "imperial", or path to file)')
 
-    # Wyoming STT settings
-    parser.add_argument('--wyoming-stt-host', default=None,
-                        help='Wyoming STT server host (e.g., localhost). Required if --stt-provider=wyoming')
-    parser.add_argument('--wyoming-stt-port', type=int, default=None,
-                        help='Wyoming STT server port (default: 10300)')
-
     # Model storage settings
     parser.add_argument('--hf-home', default=None,
                         help='HuggingFace home directory (where models are cached)')
@@ -3722,19 +3618,7 @@ def main():
                 llm_system_prompt = f.read()
             print(f"[LLM] Loaded prompt from {prompt_path}")
 
-    # STT settings
-    stt_provider = (config.stt.provider if config else None) or "local"
-    wyoming_stt_host = args.wyoming_stt_host or (config.stt.wyoming_host if config else None)
-    wyoming_stt_port = args.wyoming_stt_port or (config.stt.wyoming_port if config else None) or 10300
-
-    # Sherpa Nemotron settings
-    sherpa_encoder = (config.stt.sherpa_encoder if config else None)
-    sherpa_decoder = (config.stt.sherpa_decoder if config else None)
-    sherpa_joiner = (config.stt.sherpa_joiner if config else None)
-    sherpa_tokens = (config.stt.sherpa_tokens if config else None)
-    sherpa_provider = (config.stt.sherpa_provider if config else None) or "cuda"
-
-    # NeMo Nemotron settings
+    # NeMo Nemotron STT settings (only supported backend)
     nemotron_model = (config.stt.nemotron_model if config else None) or "nvidia/nemotron-speech-streaming-en-0.6b"
     nemotron_chunk_ms = (config.stt.nemotron_chunk_ms if config else None) or 160
     nemotron_device = (config.stt.nemotron_device if config else None) or "cuda"
@@ -3775,14 +3659,6 @@ def main():
         llm_system_prompt=llm_system_prompt,
         personality=personality,
         config_file=args.config,
-        stt_provider=stt_provider,
-        wyoming_stt_host=wyoming_stt_host,
-        wyoming_stt_port=wyoming_stt_port,
-        sherpa_encoder=sherpa_encoder,
-        sherpa_decoder=sherpa_decoder,
-        sherpa_joiner=sherpa_joiner,
-        sherpa_tokens=sherpa_tokens,
-        sherpa_provider=sherpa_provider,
         nemotron_model=nemotron_model,
         nemotron_chunk_ms=nemotron_chunk_ms,
         nemotron_device=nemotron_device,

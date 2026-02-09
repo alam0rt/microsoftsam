@@ -189,52 +189,17 @@ class PipelineBotConfig:
 class STTConfig:
     """Configuration for speech-to-text.
 
+    Only NeMo Nemotron is supported as the STT backend.
+
     Attributes:
-        provider: STT provider to use. Options:
-                  - "local" (default): Use local Whisper via LuxTTS
-                  - "wyoming": Use Wyoming STT server
-                  - "wyoming_streaming": Wyoming with local streaming wrapper
-                  - "websocket": WebSocket streaming ASR server
-                  - "sherpa_nemotron": Use Nemotron via sherpa-onnx (streaming)
-                  - "nemotron_nemo": Use Nemotron via NeMo framework (streaming)
-        wyoming_host: Wyoming STT server host.
-        wyoming_port: Wyoming STT server port.
-        sherpa_encoder: Path to sherpa-onnx encoder model.
-        sherpa_decoder: Path to sherpa-onnx decoder model.
-        sherpa_joiner: Path to sherpa-onnx joiner model.
-        sherpa_tokens: Path to sherpa-onnx tokens file.
-        sherpa_provider: ONNX runtime provider ("cuda" or "cpu").
         nemotron_model: HuggingFace model name for NeMo Nemotron.
         nemotron_chunk_ms: Chunk size in ms for streaming (80, 160, 560, 1120).
         nemotron_device: Device for NeMo Nemotron ("cuda" or "cpu").
-        websocket_endpoint: WebSocket endpoint for streaming ASR.
-        streaming_chunk_ms: Chunk size for streaming ASR (80, 160, 500).
-        streaming_stability_window: Partials before text is stable.
-        streaming_min_stable_chars: Min chars before emitting stable text.
     """
-    provider: str = "local"  # local, wyoming, wyoming_streaming, websocket, sherpa_nemotron, nemotron_nemo
-
-    # Wyoming settings
-    wyoming_host: str | None = None
-    wyoming_port: int = 10300
-
-    # Sherpa-onnx Nemotron settings
-    sherpa_encoder: str | None = None
-    sherpa_decoder: str | None = None
-    sherpa_joiner: str | None = None
-    sherpa_tokens: str | None = None
-    sherpa_provider: str = "cuda"
-
-    # NeMo Nemotron settings
+    # NeMo Nemotron settings (only supported backend)
     nemotron_model: str = "nvidia/nemotron-speech-streaming-en-0.6b"
     nemotron_chunk_ms: int = 160
     nemotron_device: str = "cuda"
-
-    # WebSocket streaming settings
-    websocket_endpoint: str | None = None
-    streaming_chunk_ms: int = 160
-    streaming_stability_window: int = 2
-    streaming_min_stable_chars: int = 10
 
 
 @dataclass
@@ -835,8 +800,9 @@ bot:
   conversation_timeout: 300   # Clear history after 5 minutes of inactivity
 
 stt:
-  wyoming_host: null          # e.g., "localhost" for wyoming-faster-whisper
-  wyoming_port: 10300         # Wyoming STT server port
+  nemotron_model: "nvidia/nemotron-speech-streaming-en-0.6b"
+  nemotron_chunk_ms: 160
+  nemotron_device: "cuda"
 
 # Model storage paths (optional)
 # Use to specify where HuggingFace and PyTorch models are downloaded/cached
