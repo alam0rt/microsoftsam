@@ -95,6 +95,10 @@ class SoundEffectsTool(Tool):
         self._web_search_cache: dict[str, tuple[float, list[dict]]] = {}
         self._web_cache_ttl = 300  # 5 minutes
 
+        # Track recently played sounds to encourage variety
+        self._recently_played: list[str] = []
+        self._max_recent = 10  # Track last 10 sounds played
+
     @property
     def name(self) -> str:
         return "sound_effects"
@@ -115,7 +119,9 @@ class SoundEffectsTool(Tool):
                 "- Dramatic revelation? 'dun dun dun' or dramatic chipmunk\n"
                 "- Good news? 'hallelujah' or celebration sounds\n"
                 "- Awkward moment? 'crickets' or 'curb your enthusiasm'\n"
-                "Think like a funny soundboard operator - timing is everything!"
+                "Think like a funny soundboard operator - timing is everything!\n"
+                "IMPORTANT: Be creative and vary your sound choices! Don't repeat the same sounds. "
+                "Search for NEW and DIFFERENT sounds related to the context."
             )
         return base
 
@@ -636,20 +642,38 @@ class SoundEffectsTool(Tool):
         metadata = index.get(query)
 
         if not metadata:
-            # Try local search
-            local_matches = self.search_sounds(query, limit=1)
+            # Try local search - get multiple matches and prefer ones not recently played
+            local_matches = self.search_sounds(query, limit=5)
             if local_matches:
-                sound_name = local_matches[0]["name"]
-                metadata = index.get(sound_name)
+                # Prefer sounds not recently played
+                for match in local_matches:
+                    if match["title"] not in self._recently_played:
+                        sound_name = match["name"]
+                        metadata = index.get(sound_name)
+                        break
+                # If all are recent, just use the first match
+                if not metadata:
+                    sound_name = local_matches[0]["name"]
+                    metadata = index.get(sound_name)
 
         # If not found locally and web search is enabled, search online
         if not metadata and search_web and self.enable_web_search:
             logger.info(f"Sound '{query}' not found locally, searching web...")
-            web_results = await self.search_myinstants(query, limit=1)
+            # Get multiple results to have variety
+            web_results = await self.search_myinstants(query, limit=5)
 
             if web_results:
-                # Download the first result
-                filepath = await self.download_sound(web_results[0])
+                # Prefer sounds not recently played
+                selected = None
+                for result in web_results:
+                    if result.get("title") not in self._recently_played:
+                        selected = result
+                        break
+                if not selected:
+                    selected = web_results[0]
+
+                # Download the selected result
+                filepath = await self.download_sound(selected)
                 if filepath:
                     # Reload index and get the new sound
                     index = self._build_index()
@@ -670,6 +694,15 @@ class SoundEffectsTool(Tool):
 
         try:
             await self._play_callback(pcm_bytes, sample_rate)
+
+            # Track this sound as recently played
+            sound_title = metadata.get('title', query)
+            if sound_title in self._recently_played:
+                self._recently_played.remove(sound_title)
+            self._recently_played.append(sound_title)
+            if len(self._recently_played) > self._max_recent:
+                self._recently_played.pop(0)
+
             source = metadata.get("source", "local")
             source_info = f" (from {source})" if source != "local" else ""
             return f"*plays {metadata['title']}*{source_info}"
@@ -703,10 +736,15 @@ class SoundEffectsTool(Tool):
             lines = [f"Cached sounds ({len(index)} total):"]
             for sound in sounds:
                 source = f" [{sound.get('source', 'local')}]" if sound.get('source') != 'local' else ""
-                lines.append(f"- {sound['title']}{source}")
+                title = sound['title']
+                recent_mark = " (recent)" if title in self._recently_played else ""
+                lines.append(f"- {title}{source}{recent_mark}")
 
             if len(index) > limit:
                 lines.append(f"... and {len(index) - limit} more.")
+
+            if self._recently_played:
+                lines.append(f"\nRecently played: {', '.join(self._recently_played[-5:])}. Try something different!")
 
             return "\n".join(lines)
 
@@ -733,9 +771,12 @@ class SoundEffectsTool(Tool):
             lines = [f"Sounds matching '{query}':"]
             for sound in results[:limit]:
                 source = f" [{sound.get('source', 'local')}]"
-                lines.append(f"- {sound['title']}{source}")
+                title = sound['title']
+                # Mark recently played sounds
+                recent_mark = " (played recently - try something different!)" if title in self._recently_played else ""
+                lines.append(f"- {title}{source}{recent_mark}")
 
-            lines.append("\nNow call sound_effects(action='play', query='<exact title>') to play one!")
+            lines.append("\nPick one you haven't played recently! Call sound_effects(action='play', query='<exact title>') to play.")
             return "\n".join(lines)
 
         elif action == "web_search":
