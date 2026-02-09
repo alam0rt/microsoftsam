@@ -506,6 +506,7 @@ class SharedBotServices:
         llm: Shared LLM client (OpenAIChatLLM).
         device: Compute device being used.
         voice_prompts: Dict of persona_name -> pre-computed voice tensors.
+        echo_filter: Shared echo filter so all bots know what all bots said.
     """
     
     def __init__(
@@ -520,6 +521,8 @@ class SharedBotServices:
         self.llm = llm
         self.device = device
         self.voice_prompts: dict[str, dict] = {}
+        # Shared echo filter - all bots add their TTS output here
+        self.echo_filter = EchoFilter(decay_time=5.0)
     
     def load_voice(self, name: str, audio_path: str, voices_dir: str = "voices") -> dict:
         """Load and cache a voice prompt.
@@ -723,6 +726,7 @@ class MumbleVoiceBot:
         shared_stt=None,  # Shared STT engine  
         shared_llm=None,  # Shared LLM client
         voice_prompt=None,  # Pre-computed voice prompt (tensors)
+        shared_echo_filter=None,  # Shared echo filter for multi-bot
     ):
         self.host = host
         self.user = user
@@ -754,6 +758,9 @@ class MumbleVoiceBot:
 
         # Barge-in settings
         self.barge_in_enabled = barge_in_enabled  # allow users to interrupt bot
+
+        # Multi-bot coordination (shared echo filter so all bots know what all bots said)
+        self._shared_echo_filter = shared_echo_filter
 
         # Pending transcriptions (for accumulating long utterances)
         self.pending_text = {}  # user_id -> accumulated text
@@ -1253,14 +1260,18 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         # Get bot config settings
         bot_config = config.bot if config else None
 
-        # Initialize echo filter
-        echo_enabled = getattr(bot_config, 'echo_filter_enabled', True) if bot_config else True
-        if echo_enabled:
-            decay_time = getattr(bot_config, 'echo_filter_decay', 3.0) if bot_config else 3.0
-            self.echo_filter = EchoFilter(decay_time=decay_time)
-            print(f"[Speech] Echo filter enabled (decay={decay_time}s)")
+        # Initialize echo filter - use shared if available (multi-bot mode)
+        if self._shared_echo_filter is not None:
+            self.echo_filter = self._shared_echo_filter
+            print(f"[Speech] Using shared echo filter (multi-bot mode)")
         else:
-            print("[Speech] Echo filter disabled")
+            echo_enabled = getattr(bot_config, 'echo_filter_enabled', True) if bot_config else True
+            if echo_enabled:
+                decay_time = getattr(bot_config, 'echo_filter_decay', 3.0) if bot_config else 3.0
+                self.echo_filter = EchoFilter(decay_time=decay_time)
+                print(f"[Speech] Echo filter enabled (decay={decay_time}s)")
+            else:
+                print("[Speech] Echo filter disabled")
 
         # Initialize utterance classifier
         utterance_enabled = getattr(bot_config, 'utterance_filter_enabled', True) if bot_config else True
@@ -2786,6 +2797,7 @@ def run_multi_persona_bot(args):
             shared_stt=shared.stt,
             shared_llm=shared.llm,
             voice_prompt=voice_prompt,
+            shared_echo_filter=shared.echo_filter,
         )
         bots.append(bot)
     
