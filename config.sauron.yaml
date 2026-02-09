@@ -39,6 +39,21 @@ bot:
   max_response_staleness: 15.0  # Skip responses older than this (seconds)
   barge_in_enabled: false  # Bot talks over everyone without interruption
 
+  # Speech filtering (Better Speech Plan)
+  echo_filter_enabled: true       # Prevent bot from responding to its own speech
+  echo_filter_decay_seconds: 30.0
+  utterance_filter_enabled: true  # Filter out non-meaningful utterances
+  utterance_filter_min_words: 1
+  utterance_filter_min_chars: 3
+  turn_prediction_enabled: true   # Adaptive response delays
+  turn_prediction_base_delay: 0.3
+  turn_prediction_max_delay: 2.0
+  turn_prediction_threshold: 0.7
+  state_machine_enabled: true     # Turn management state machine
+  state_machine_cooldown: 0.5
+  preserve_context_on_switch: true  # Keep conversation when switching souls
+  max_preserved_messages: 10
+
 # Tools work with LFM2.5 via text-based format (not OpenAI-style API parameter)
 # The bot auto-detects and uses the appropriate format for each model
 tools:
