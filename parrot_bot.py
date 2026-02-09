@@ -331,10 +331,13 @@ class ParrotBot:
             
             try:
                 voice_prompt = self.tts.encode_prompt(temp_path, rms=0.01)
+                print(f"[ParrotBot] Voice prompt encoded successfully")
             finally:
                 os.unlink(temp_path)
         except Exception as e:
             print(f"[ParrotBot] Voice cloning error: {e}")
+            import traceback
+            traceback.print_exc()
             return
         
         # Generate speech
@@ -344,13 +347,22 @@ class ParrotBot:
             audio = self.tts.generate_speech(
                 text, voice_prompt, num_steps=4, speed=1.0
             )
-            # Convert to 16-bit PCM at 48kHz
-            audio_np = audio.numpy() if hasattr(audio, 'numpy') else audio
+            # Convert to 16-bit PCM at 48kHz (same as mumble_tts_bot)
+            # Must call .cpu() before .numpy() for CUDA tensors
             if hasattr(audio, 'cpu'):
-                audio_np = audio.cpu().numpy()
+                audio_np = audio.cpu().numpy().squeeze()
+            elif hasattr(audio, 'numpy'):
+                audio_np = audio.numpy().squeeze()
+            else:
+                audio_np = np.array(audio).squeeze()
+            # Clip to valid range and convert to 16-bit PCM
+            audio_np = np.clip(audio_np, -1.0, 1.0)
             audio_pcm = (audio_np * 32767).astype(np.int16).tobytes()
+            print(f"[ParrotBot] Generated {len(audio_pcm)} bytes of audio")
         except Exception as e:
             print(f"[ParrotBot] TTS error: {e}")
+            import traceback
+            traceback.print_exc()
             return
         
         # Queue for playback
@@ -376,7 +388,9 @@ class ParrotBot:
 
     def _play_audio(self, pcm_data: bytes):
         """Play PCM audio through Mumble."""
-        chunk_size = 48000 * 2 // 50  # 20ms chunks at 48kHz, 16-bit
+        chunk_size = 48000 * 2 // 50  # 20ms chunks at 48kHz, 16-bit (1920 bytes)
+        total_chunks = (len(pcm_data) + chunk_size - 1) // chunk_size
+        print(f"[ParrotBot] Playing {len(pcm_data)} bytes in {total_chunks} chunks")
         
         for i in range(0, len(pcm_data), chunk_size):
             if self._shutdown.is_set():
@@ -389,6 +403,8 @@ class ParrotBot:
             
             self.mumble.sound_output.add_sound(chunk)
             time.sleep(0.018)  # ~20ms per chunk
+        
+        print(f"[ParrotBot] Finished playing audio")
 
 
 def main():
