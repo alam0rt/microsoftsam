@@ -13,15 +13,20 @@ Usage:
 import argparse
 import asyncio
 import io
+import logging
 import os
 import queue
 import sys
 import threading
 import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 from scipy import signal
+
+# Module logger
+logger = logging.getLogger(__name__)
 
 # Add vendor paths
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -57,9 +62,9 @@ class StreamingLuxTTS:
 
     def __init__(self, device: str = "cuda"):
         self.device = device
-        print(f"[TTS] Loading LuxTTS on {device}...")
+        logger.info(f"Loading LuxTTS on {device}...")
         self.tts = LuxTTS(device=device)
-        print("[TTS] LuxTTS ready")
+        logger.info("LuxTTS ready")
 
     def encode_prompt(self, audio_path: str, rms: float = 0.01, duration: float = 5.0) -> dict:
         """Encode a reference audio file for voice cloning."""
@@ -104,22 +109,25 @@ class ParrotBot:
         self.min_speech_duration = min_speech_duration
         self.silence_timeout = silence_timeout
 
+        # Setup logging
+        self.logger = logging.getLogger(f"parrot.{user}")
+        
         # Use shared services if provided, otherwise create our own
         if shared_tts is not None:
-            print(f"[ParrotBot] Using shared TTS")
+            self.logger.info("Using shared TTS")
             self.tts = shared_tts
             self._owns_tts = False
         else:
-            print(f"[ParrotBot] Initializing TTS on {device}...")
+            self.logger.info(f"Initializing TTS on {device}...")
             self.tts = StreamingLuxTTS(device=device)
             self._owns_tts = True
 
         if shared_stt is not None:
-            print(f"[ParrotBot] Using shared STT")
+            self.logger.info("Using shared STT")
             self.stt = shared_stt
             self._owns_stt = False
         else:
-            print("[ParrotBot] Initializing NeMo Nemotron STT...")
+            self.logger.info("Initializing NeMo Nemotron STT...")
             stt_config = NemotronConfig(
                 model_name="nvidia/nemotron-speech-streaming-en-0.6b",
                 chunk_size_ms=160,
@@ -128,7 +136,7 @@ class ParrotBot:
             self.stt = NemotronStreamingASR(stt_config)
             asyncio.run(self.stt.initialize())
             self._owns_stt = True
-        print("[ParrotBot] Ready")
+        self.logger.info("Ready")
 
         # Audio buffers per user
         self.user_audio_buffers = {}  # user_id -> list of PCM chunks
@@ -147,7 +155,7 @@ class ParrotBot:
 
     def start(self):
         """Connect to Mumble server."""
-        print(f"[ParrotBot] Connecting to {self.host}:{self.port} as {self.user}...")
+        self.logger.info(f"Connecting to {self.host}:{self.port} as {self.user}...")
         
         self.mumble = pymumble.Mumble(
             self.host, self.user, 
@@ -172,11 +180,11 @@ class ParrotBot:
             try:
                 ch = self.mumble.channels.find_by_name(self.channel)
                 ch.move_in()
-                print(f"[ParrotBot] Joined channel: {self.channel}")
+                self.logger.info(f"Joined channel: {self.channel}")
             except Exception as e:
-                print(f"[ParrotBot] Failed to join channel '{self.channel}': {e}")
+                self.logger.warning(f"Failed to join channel '{self.channel}': {e}")
         
-        print(f"[ParrotBot] Connected! Listening for speech...")
+        self.logger.info(f"Connected! Listening for speech...")
 
     def run_forever(self):
         """Run the bot until interrupted."""
@@ -192,7 +200,7 @@ class ParrotBot:
             while not self._shutdown.is_set():
                 time.sleep(0.1)
         except KeyboardInterrupt:
-            print("\n[ParrotBot] Shutting down...")
+            self.logger.info("Shutting down...")
         finally:
             self._shutdown.set()
             if self.mumble:
@@ -223,7 +231,7 @@ class ParrotBot:
         # Voice activity detection
         if rms >= self.asr_threshold:
             if not self.user_is_speaking.get(user_id):
-                print(f"[ParrotBot] {user_name} started speaking (RMS={rms})")
+                self.logger.debug(f"{user_name} started speaking (RMS={rms})")
                 self.user_is_speaking[user_id] = True
             
             # Buffer the audio
@@ -269,10 +277,10 @@ class ParrotBot:
         duration = len(pcm_data) / (48000 * 2)  # 48kHz, 16-bit mono
         
         if duration < self.min_speech_duration:
-            print(f"[ParrotBot] Ignoring short utterance from {user_name} ({duration:.1f}s)")
+            self.logger.debug(f"Ignoring short utterance from {user_name} ({duration:.1f}s)")
             return
         
-        print(f"[ParrotBot] Processing {duration:.1f}s of audio from {user_name}...")
+        self.logger.debug(f"Processing {duration:.1f}s of audio from {user_name}...")
         
         # Convert 48kHz -> 16kHz for STT
         audio_int16 = np.frombuffer(pcm_data, dtype=np.int16)
@@ -289,7 +297,9 @@ class ParrotBot:
         audio_16k_int16 = (audio_16k * 32767).astype(np.int16)
         pcm_16k_bytes = audio_16k_int16.tobytes()
         
-        # Transcribe
+        # Transcribe with timing
+        import time as _time
+        transcribe_start = _time.time()
         try:
             result = asyncio.run(self.stt.transcribe(
                 audio_data=pcm_16k_bytes,
@@ -299,18 +309,20 @@ class ParrotBot:
                 language="en",
             ))
             text = result.text.strip()
+            transcribe_time = _time.time() - transcribe_start
         except Exception as e:
-            print(f"[ParrotBot] STT error: {e}")
+            self.logger.error(f"STT error: {e}")
             return
         
         if not text or len(text) < 2:
-            print(f"[ParrotBot] No speech detected from {user_name}")
+            self.logger.debug(f"No speech detected from {user_name}")
             return
         
-        print(f'[ParrotBot] {user_name} said: "{text}"')
+        # Log ASR result in same format as main bot
+        self.logger.info(f'ASR ({transcribe_time*1000:.0f}ms): "{text}" [from {user_name}, {duration:.1f}s audio]')
         
         # Clone voice from the user's audio
-        print(f"[ParrotBot] Cloning {user_name}'s voice...")
+        self.logger.debug(f"Cloning {user_name}'s voice...")
         try:
             # Write audio to temp file for voice cloning
             import soundfile as sf
@@ -331,17 +343,16 @@ class ParrotBot:
             
             try:
                 voice_prompt = self.tts.encode_prompt(temp_path, rms=0.01)
-                print(f"[ParrotBot] Voice prompt encoded successfully")
+                self.logger.debug("Voice prompt encoded successfully")
             finally:
                 os.unlink(temp_path)
         except Exception as e:
-            print(f"[ParrotBot] Voice cloning error: {e}")
-            import traceback
+            self.logger.error(f"Voice cloning error: {e}")
             traceback.print_exc()
             return
         
         # Generate speech
-        print(f"[ParrotBot] Generating speech...")
+        self.logger.debug("Generating speech...")
         try:
             # Use generate_speech for the shared TTS (StreamingLuxTTS from mumble_tts_bot)
             audio = self.tts.generate_speech(
@@ -358,10 +369,9 @@ class ParrotBot:
             # Clip to valid range and convert to 16-bit PCM
             audio_np = np.clip(audio_np, -1.0, 1.0)
             audio_pcm = (audio_np * 32767).astype(np.int16).tobytes()
-            print(f"[ParrotBot] Generated {len(audio_pcm)} bytes of audio")
+            self.logger.debug(f"Generated {len(audio_pcm)} bytes of audio")
         except Exception as e:
-            print(f"[ParrotBot] TTS error: {e}")
-            import traceback
+            self.logger.error(f"TTS error: {e}")
             traceback.print_exc()
             return
         
@@ -377,7 +387,7 @@ class ParrotBot:
                 continue
             
             user_name, text, audio_pcm = item
-            print(f'[ParrotBot] Speaking as {user_name}: "{text}"')
+            self.logger.info(f'TTS generating: "{text}" [as {user_name}]')
             
             self._speaking.set()
             try:
@@ -390,7 +400,7 @@ class ParrotBot:
         """Play PCM audio through Mumble."""
         chunk_size = 48000 * 2 // 50  # 20ms chunks at 48kHz, 16-bit (1920 bytes)
         total_chunks = (len(pcm_data) + chunk_size - 1) // chunk_size
-        print(f"[ParrotBot] Playing {len(pcm_data)} bytes in {total_chunks} chunks")
+        self.logger.debug(f"Playing {len(pcm_data)} bytes in {total_chunks} chunks")
         
         for i in range(0, len(pcm_data), chunk_size):
             if self._shutdown.is_set():
@@ -404,7 +414,7 @@ class ParrotBot:
             self.mumble.sound_output.add_sound(chunk)
             time.sleep(0.018)  # ~20ms per chunk
         
-        print(f"[ParrotBot] Finished playing audio")
+        self.logger.debug("Finished playing audio")
 
 
 def main():
@@ -424,8 +434,18 @@ def main():
                         help="Minimum speech duration in seconds")
     parser.add_argument("--silence-timeout", type=float, default=1.5,
                         help="Silence duration to consider speech ended")
+    parser.add_argument("--debug", action="store_true",
+                        help="Enable debug logging")
     
     args = parser.parse_args()
+    
+    # Configure logging for standalone mode
+    log_level = logging.DEBUG if args.debug else logging.INFO
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
     
     bot = ParrotBot(
         host=args.host,
