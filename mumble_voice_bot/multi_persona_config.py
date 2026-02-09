@@ -93,7 +93,7 @@ def _validate_persona_data(persona_data: dict, index: int) -> list[str]:
     valid_fields = {
         "name", "display_name", "soul", "system_prompt",
         "mumble", "llm_overrides", "max_history_messages",
-        "respond_to_other_personas",
+        "respond_to_other_personas", "tts",  # tts for voice override
     }
     for key in persona_data.keys():
         if key not in valid_fields:
@@ -154,7 +154,7 @@ def _validate_multi_persona_config(config_data: dict, path: Path) -> None:
     errors = []
     
     # Valid top-level sections
-    valid_sections = {"shared", "personas", "interaction", "mumble"}
+    valid_sections = {"shared", "personas", "interaction", "mumble", "models"}
     for key in config_data.keys():
         if key not in valid_sections:
             errors.append(
@@ -261,6 +261,9 @@ def _build_persona_config(
         llm_overrides=persona_data.get("llm_overrides", {}),
         max_history_messages=persona_data.get("max_history_messages", 20),
         respond_to_other_personas=persona_data.get("respond_to_other_personas", False),
+        tts=persona_data.get("tts", {}),
+        soul_config=soul_config,
+        mumble=effective_mumble,
     )
 
 

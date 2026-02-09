@@ -1,72 +1,26 @@
-# Multi-Persona Bot Implementation TODO
+# Multi-Persona Bot Implementation
 
 ## Overview
 
-This tracks the implementation of multi-persona bot support, allowing multiple bot personalities to share TTS/STT/LLM resources while maintaining separate Mumble identities.
+Multi-persona support allows running multiple bot personalities that share TTS/STT/LLM resources while maintaining separate Mumble identities.
 
-## Completed
+## Architecture (Simplified)
 
-- [x] **Phase 1: Interfaces & Config** (February 2026)
-  - [x] Design shared services interfaces (`interfaces/services.py`)
-  - [x] Create `VoicePrompt`, `PersonaIdentity`, `PersonaConfig`, `Persona` dataclasses
-  - [x] Create `SharedServices` container for TTS/STT/LLM
-  - [x] Create `PersonaManager` abstract base class
-  - [x] Design `InteractionConfig` for bot-to-bot settings
-  - [x] Design `MultiPersonaConfig` schema
-  - [x] Write tests for interfaces (44 tests)
-  - [x] Create `multi_persona_config.py` config loader
-  - [x] Write tests for config loading (29 tests)
-  - [x] Create example config (`config.multi-persona.example.yaml`)
-
-## In Progress
-
-- [ ] **Phase 2: MultiPersonaCoordinator**
-  - [ ] Create `MultiPersonaCoordinator` class that:
-    - [ ] Initializes `SharedServices` from config
-    - [ ] Pre-loads voice prompts for all personas
-    - [ ] Creates separate Mumble connections per persona
-    - [ ] Routes audio to appropriate persona handlers
-    - [ ] Manages persona state transitions
-  - [ ] Implement bot-to-bot audio routing
-  - [ ] Add loop prevention for bot-to-bot conversations
-
-## Not Started
-
-- [ ] **Phase 3: Refactor MumbleVoiceBot**
-  - [ ] Extract TTS/STT/LLM initialization into factory functions
-  - [ ] Add dependency injection for `SharedServices`
-  - [ ] Create lightweight `PersonaBot` class that uses shared services
-  - [ ] Maintain backward compatibility with single-bot mode
-
-- [ ] **Phase 4: CLI & Runtime**
-  - [ ] Add `--multi-persona` CLI flag
-  - [ ] Auto-detect multi-persona configs via `is_multi_persona_config()`
-  - [ ] Add graceful startup/shutdown for multiple Mumble connections
-  - [ ] Add health monitoring for each persona
-
-- [ ] **Phase 5: Bot-to-Bot Interactions**
-  - [ ] Implement `InteractionConfig` logic:
-    - [ ] `enable_cross_talk` - bots hear each other
-    - [ ] `response_delay_ms` - delay before responding to other bot
-    - [ ] `max_chain_length` - prevent infinite loops
-    - [ ] `cooldown_after_chain_ms` - cooldown after max chain
-  - [ ] Add speaker detection to identify bot vs human audio
-  - [ ] Add conversation chain tracking
-
-## Architecture Reference
+The architecture is simple: both single-bot and multi-bot modes use the same `MumbleVoiceBot` class. The only difference is whether services are shared.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    SharedServices                           │
-│  - Single TTS engine (multiple voice prompts)               │
-│  - Single STT engine                                        │
-│  - Single LLM client (different system prompts per persona) │
+│                  SharedBotServices                          │
+│  - Single TTS engine (StreamingLuxTTS)                      │
+│  - Single STT engine (Wyoming/Nemotron)                     │
+│  - Single LLM client (OpenAI-compatible)                    │
+│  - Voice prompt cache (per-persona)                         │
 └─────────────────────────────────────────────────────────────┘
                               │
             ┌─────────────────┼─────────────────┐
             ▼                 ▼                 ▼
     ┌───────────────┐ ┌───────────────┐ ┌───────────────┐
-    │   Persona 1   │ │   Persona 2   │ │   Persona N   │
+    │MumbleVoiceBot │ │MumbleVoiceBot │ │MumbleVoiceBot │
     │  (Knight)     │ │(PotionSeller) │ │   (Custom)    │
     │               │ │               │ │               │
     │ - Mumble conn │ │ - Mumble conn │ │ - Mumble conn │
@@ -76,10 +30,83 @@ This tracks the implementation of multi-persona bot support, allowing multiple b
     └───────────────┘ └───────────────┘ └───────────────┘
 ```
 
+## Completed
+
+- [x] **Refactored MumbleVoiceBot** for dependency injection
+  - [x] Added `shared_tts`, `shared_stt`, `shared_llm`, `voice_prompt` parameters
+  - [x] Bot can use provided shared services or create its own
+  - [x] Backward compatible - single-bot mode unchanged
+  
+- [x] **Created SharedBotServices class**
+  - [x] Container for shared TTS/STT/LLM
+  - [x] `load_voice()` method with caching
+  - [x] Device management
+
+- [x] **Created create_shared_services() factory**
+  - [x] Initializes TTS/STT/LLM once
+  - [x] Auto-detects best device
+  - [x] Configurable via parameters
+
+- [x] **Updated multi-persona mode**
+  - [x] Auto-detects multi-persona configs
+  - [x] Creates shared services once
+  - [x] Instantiates N MumbleVoiceBot instances
+  - [x] Each bot gets own Mumble connection and system prompt
+
+- [x] **Tests**
+  - [x] SharedBotServices tests (6 tests)
+  - [x] MumbleVoiceBot shared services tests (2 tests)
+  - [x] Multi-persona config tests (3 tests)
+  - [x] **670 total tests passing**
+
+## Usage
+
+### Single Bot (unchanged)
+```bash
+python mumble_tts_bot.py --config config.sauron.yaml
+```
+
+### Multiple Bots
+```bash
+# Config with `personas:` section is auto-detected
+python mumble_tts_bot.py --config config.multi-persona.yaml
+```
+
+### Example Multi-Persona Config
+```yaml
+personas:
+  - name: knight
+    soul: knight
+    mumble:
+      user: "Sir Knight"
+    tts:
+      ref_audio: "souls/knight/audio/ref.wav"
+      
+  - name: seller
+    soul: potion-seller
+    mumble:
+      user: "Potion Seller"
+    tts:
+      ref_audio: "souls/potion-seller/audio/ref.wav"
+
+shared:
+  llm:
+    endpoint: "http://localhost:11434/v1/chat/completions"
+    model: "llama3.2:3b"
+  stt:
+    provider: "wyoming"
+    wyoming_host: "localhost"
+
+mumble:
+  host: "mumble.example.com"
+  port: 64738
+```
+
 ## Files Reference
 
-- `mumble_voice_bot/interfaces/services.py` - Core interfaces
+- `mumble_tts_bot.py` - Main module with `SharedBotServices`, `create_shared_services()`, `MumbleVoiceBot`
 - `mumble_voice_bot/multi_persona_config.py` - Config loader
 - `config.multi-persona.example.yaml` - Example config
+- `tests/test_coordinator.py` - SharedBotServices tests
 - `tests/test_multi_persona.py` - Interface tests
 - `tests/test_multi_persona_config.py` - Config tests

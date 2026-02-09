@@ -135,12 +135,18 @@ class PersonaConfig:
         llm_overrides: LLM parameter overrides (temperature, max_tokens, etc).
         max_history_messages: Maximum conversation history to maintain.
         respond_to_other_personas: Whether to respond to other bot personas.
+        tts: TTS configuration (ref_audio, num_steps, etc).
+        soul_config: Loaded soul configuration object.
+        mumble: Mumble connection settings.
     """
     identity: PersonaIdentity
     voice_prompt: VoicePrompt | None = None
     llm_overrides: dict[str, Any] = field(default_factory=dict)
     max_history_messages: int = 20
     respond_to_other_personas: bool = False
+    tts: dict[str, Any] = field(default_factory=dict)
+    soul_config: Any = None  # SoulConfig from config.py
+    mumble: dict[str, Any] = field(default_factory=dict)
 
 
 @runtime_checkable

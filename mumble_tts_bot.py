@@ -60,6 +60,17 @@ except ImportError as e:
     ConfigValidationError = Exception  # Fallback
     logger.warning(f"LLM modules not available: {e}")
 
+# Import multi-persona config support
+try:
+    from mumble_voice_bot.multi_persona_config import (
+        is_multi_persona_config,
+        load_multi_persona_config,
+    )
+    MULTI_PERSONA_AVAILABLE = True
+except ImportError as e:
+    MULTI_PERSONA_AVAILABLE = False
+    logger.debug(f"Multi-persona config not available: {e}")
+
 # Import Wyoming STT provider
 try:
     from mumble_voice_bot.providers.wyoming_stt import WyomingSTTSync
@@ -480,11 +491,180 @@ def ensure_models_downloaded(device: str = 'cuda') -> None:
 
 
 # =============================================================================
+# Shared Services Factory
+# =============================================================================
+
+class SharedBotServices:
+    """Container for shared TTS/STT/LLM services used by multiple bots.
+    
+    This allows running multiple MumbleVoiceBot instances that share expensive
+    resources like neural network models.
+    
+    Attributes:
+        tts: Shared TTS engine (StreamingLuxTTS).
+        stt: Shared STT engine (Wyoming or Nemotron).
+        llm: Shared LLM client (OpenAIChatLLM).
+        device: Compute device being used.
+        voice_prompts: Dict of persona_name -> pre-computed voice tensors.
+    """
+    
+    def __init__(
+        self,
+        tts=None,
+        stt=None,
+        llm=None,
+        device: str = "cuda",
+    ):
+        self.tts = tts
+        self.stt = stt
+        self.llm = llm
+        self.device = device
+        self.voice_prompts: dict[str, dict] = {}
+    
+    def load_voice(self, name: str, audio_path: str, voices_dir: str = "voices") -> dict:
+        """Load and cache a voice prompt.
+        
+        Args:
+            name: Name for this voice (used as cache key).
+            audio_path: Path to reference audio file.
+            voices_dir: Directory for cached voice tensors.
+            
+        Returns:
+            Voice prompt dict with tensors.
+        """
+        if name in self.voice_prompts:
+            return self.voice_prompts[name]
+        
+        if self.tts is None:
+            raise RuntimeError("TTS not initialized")
+        
+        os.makedirs(voices_dir, exist_ok=True)
+        ref_name = os.path.splitext(os.path.basename(audio_path))[0]
+        cache_path = os.path.join(voices_dir, f"{ref_name}.pt")
+        
+        if os.path.exists(cache_path):
+            print(f"[Voice] Loading cached voice: {cache_path}")
+            voice = torch.load(cache_path, weights_only=False, map_location=self.device)
+        else:
+            print(f"[Voice] Encoding reference: {audio_path}")
+            voice = self.tts.encode_prompt(audio_path, rms=0.01)
+            torch.save(voice, cache_path)
+            print(f"[Voice] Cached as '{ref_name}'")
+        
+        # Ensure tensors on correct device
+        voice = {
+            k: v.to(self.device) if isinstance(v, torch.Tensor) else v
+            for k, v in voice.items()
+        }
+        
+        self.voice_prompts[name] = voice
+        return voice
+
+
+def create_shared_services(
+    device: str = "auto",
+    stt_provider: str = "local",
+    wyoming_stt_host: str = None,
+    wyoming_stt_port: int = 10300,
+    nemotron_model: str = None,
+    nemotron_chunk_ms: int = 160,
+    nemotron_device: str = None,
+    llm_endpoint: str = None,
+    llm_model: str = None,
+    llm_api_key: str = None,
+    llm_timeout: float = 30.0,
+    llm_max_tokens: int = None,
+    llm_temperature: float = None,
+) -> SharedBotServices:
+    """Create shared services for multiple bots.
+    
+    This factory creates TTS, STT, and LLM services once, which can then be
+    shared across multiple MumbleVoiceBot instances.
+    
+    Args:
+        device: Compute device ('auto', 'cuda', 'cpu', 'mps').
+        stt_provider: STT provider ('local', 'wyoming', 'nemotron_nemo').
+        wyoming_stt_host: Wyoming STT server host.
+        wyoming_stt_port: Wyoming STT server port.
+        nemotron_model: NeMo Nemotron model name.
+        nemotron_chunk_ms: Nemotron chunk size in ms.
+        nemotron_device: Device for Nemotron (defaults to device).
+        llm_endpoint: LLM API endpoint.
+        llm_model: LLM model name.
+        llm_api_key: LLM API key.
+        llm_timeout: LLM request timeout.
+        llm_max_tokens: Max tokens for LLM responses.
+        llm_temperature: LLM temperature.
+        
+    Returns:
+        SharedBotServices instance with initialized services.
+    """
+    # Determine device
+    if device == "auto":
+        device = get_best_device()
+    
+    print(f"[SharedServices] Initializing on {device}")
+    
+    # Ensure models downloaded
+    ensure_models_downloaded(device=device)
+    
+    # Initialize TTS
+    print(f"[SharedServices] Loading TTS model...")
+    tts = StreamingLuxTTS('YatharthS/LuxTTS', device=device, threads=2)
+    
+    # Initialize STT
+    stt = None
+    if stt_provider == "wyoming" and wyoming_stt_host and WYOMING_AVAILABLE:
+        print(f"[SharedServices] Using Wyoming STT at {wyoming_stt_host}:{wyoming_stt_port}")
+        stt = WyomingSTTSync(host=wyoming_stt_host, port=wyoming_stt_port)
+    elif stt_provider == "nemotron_nemo" and NEMOTRON_NEMO_AVAILABLE:
+        model = nemotron_model or "nvidia/nemotron-speech-streaming-en-0.6b"
+        nemo_device = nemotron_device or device
+        print(f"[SharedServices] Loading NeMo Nemotron ({model})...")
+        config = NemotronConfig(
+            model_name=model,
+            chunk_size_ms=nemotron_chunk_ms,
+            device=nemo_device,
+        )
+        stt = NemotronStreamingASR(config)
+        if not asyncio.run(stt.initialize()):
+            logger.warning("Failed to initialize Nemotron")
+            stt = None
+    else:
+        print(f"[SharedServices] Using local Whisper via TTS")
+    
+    # Initialize LLM
+    llm = None
+    if LLM_AVAILABLE:
+        endpoint = llm_endpoint or "http://localhost:11434/v1/chat/completions"
+        model = llm_model or "llama3.2:3b"
+        api_key = llm_api_key or os.environ.get('OPENROUTER_API_KEY') or os.environ.get('LLM_API_KEY')
+        
+        print(f"[SharedServices] Initializing LLM: {model}")
+        llm = OpenAIChatLLM(
+            endpoint=endpoint,
+            model=model,
+            api_key=api_key,
+            system_prompt="",  # Set per-bot
+            timeout=llm_timeout,
+            max_tokens=llm_max_tokens,
+            temperature=llm_temperature,
+        )
+    
+    print(f"[SharedServices] Ready!")
+    return SharedBotServices(tts=tts, stt=stt, llm=llm, device=device)
+
+
+# =============================================================================
 # MumbleVoiceBot - Main bot class
 # =============================================================================
 
 class MumbleVoiceBot:
-    """A Mumble bot that listens, thinks with an LLM, and responds with TTS."""
+    """A Mumble bot that listens, thinks with an LLM, and responds with TTS.
+    
+    Can be instantiated with shared TTS/STT/LLM services (for multi-bot mode)
+    or will create its own services (single-bot mode).
+    """
 
     def __init__(
         self,
@@ -529,6 +709,11 @@ class MumbleVoiceBot:
         soul_name=None,  # Name of the active soul (for tool queries)
         # Tools configuration
         tools_config=None,  # ToolsConfig for tool settings
+        # Shared services (for multi-bot mode)
+        shared_tts=None,  # Shared TTS engine
+        shared_stt=None,  # Shared STT engine  
+        shared_llm=None,  # Shared LLM client
+        voice_prompt=None,  # Pre-computed voice prompt (tensors)
     ):
         self.host = host
         self.user = user
@@ -640,20 +825,38 @@ class MumbleVoiceBot:
         )
         self._tts_worker_thread.start()
 
-        # Initialize TTS
-        print(f"[TTS] Loading model on {device}...")
-        self.tts = StreamingLuxTTS('YatharthS/LuxTTS', device=device, threads=2)
+        # Initialize TTS - use shared or create own
+        if shared_tts is not None:
+            self.tts = shared_tts
+            self._owns_tts = False
+            print(f"[TTS] Using shared TTS engine")
+        else:
+            print(f"[TTS] Loading model on {device}...")
+            self.tts = StreamingLuxTTS('YatharthS/LuxTTS', device=device, threads=2)
+            self._owns_tts = True
 
-        # Load voice
+        # Load voice - use provided or load from file
         os.makedirs(self.voices_dir, exist_ok=True)
-        self._load_reference_voice(reference_audio)
+        if voice_prompt is not None:
+            self.voice_prompt = self._ensure_voice_on_device(voice_prompt)
+            print(f"[Voice] Using provided voice prompt")
+        else:
+            self._load_reference_voice(reference_audio)
 
-        # Initialize STT provider
+        # Initialize STT provider - use shared or create own
         self.stt_provider = stt_provider
         self.wyoming_stt = None
         self.streaming_stt = None
+        self._owns_stt = False
 
-        if stt_provider == "wyoming":
+        if shared_stt is not None:
+            # Use shared STT
+            if hasattr(shared_stt, 'transcribe'):
+                self.wyoming_stt = shared_stt
+            else:
+                self.streaming_stt = shared_stt
+            print(f"[STT] Using shared STT engine")
+        elif stt_provider == "wyoming":
             if wyoming_stt_host and WYOMING_AVAILABLE:
                 print(f"[STT] Using Wyoming STT at {wyoming_stt_host}:{wyoming_stt_port}")
                 self.wyoming_stt = WyomingSTTSync(host=wyoming_stt_host, port=wyoming_stt_port)
@@ -718,10 +921,20 @@ class MumbleVoiceBot:
         # Initialize speech filters (echo detection, utterance classification, turn prediction)
         self._init_speech_filters()
 
-        # Initialize LLM
+        # Initialize LLM - use shared or create own
         self.llm = None
         self.tools = None  # Tool registry for function calling
-        if LLM_AVAILABLE:
+        self._owns_llm = False
+        
+        if shared_llm is not None:
+            # Use shared LLM - note: system prompt is set per-request in multi-bot mode
+            self.llm = shared_llm
+            print("[LLM] Using shared LLM client")
+            # Still initialize tools
+            if TOOLS_AVAILABLE:
+                self._init_tools()
+        elif LLM_AVAILABLE:
+            self._owns_llm = True
             self._init_llm(
                 endpoint=llm_endpoint,
                 model=llm_model,
@@ -2469,6 +2682,145 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 self._event_loop.call_soon_threadsafe(self._event_loop.stop)
 
 
+def run_multi_persona_bot(args):
+    """Run the bot in multi-persona mode.
+    
+    Loads a multi-persona config and creates multiple MumbleVoiceBot instances
+    that share TTS/STT/LLM resources.
+    
+    Args:
+        args: Parsed command-line arguments.
+    """
+    try:
+        config = load_multi_persona_config(args.config)
+        logger.info(f"Loaded multi-persona config with {len(config.personas)} personas")
+        for p in config.personas:
+            logger.info(f"  - {p.identity.name} ({p.identity.display_name})")
+    except Exception as e:
+        logger.error(f"Failed to load multi-persona config: {e}")
+        print(f"\n❌ Failed to load multi-persona config:\n{e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Apply HF_HOME if specified
+    if args.hf_home:
+        os.environ["HF_HOME"] = args.hf_home
+        logger.info(f"HF_HOME={args.hf_home}")
+
+    # Determine device
+    if args.device != 'auto':
+        device = args.device
+    else:
+        device = get_best_device()
+    
+    logger.info(f"Using device: {device}")
+
+    # Get shared config
+    shared_config = config.shared or {}
+    stt_config = shared_config.get("stt", {})
+    llm_config = shared_config.get("llm", {})
+
+    # Create shared services
+    print("[Multi-Persona] Creating shared services...")
+    shared = create_shared_services(
+        device=device,
+        stt_provider=stt_config.get("provider", "local"),
+        wyoming_stt_host=stt_config.get("wyoming_host"),
+        wyoming_stt_port=stt_config.get("wyoming_port", 10300),
+        nemotron_model=stt_config.get("nemotron_model"),
+        nemotron_chunk_ms=stt_config.get("nemotron_chunk_ms", 160),
+        nemotron_device=stt_config.get("nemotron_device"),
+        llm_endpoint=llm_config.get("endpoint"),
+        llm_model=llm_config.get("model"),
+        llm_api_key=llm_config.get("api_key"),
+        llm_timeout=llm_config.get("timeout", 30.0),
+        llm_max_tokens=llm_config.get("max_tokens"),
+        llm_temperature=llm_config.get("temperature"),
+    )
+
+    # Create bot instances - one per persona
+    bots = []
+    print(f"[Multi-Persona] Creating {len(config.personas)} bot instances...")
+    
+    for persona_config in config.personas:
+        identity = persona_config.identity
+        
+        # Get Mumble connection info
+        mumble_user = identity.mumble_user or identity.display_name or identity.name
+        mumble_channel = persona_config.mumble.get("channel") if persona_config.mumble else None
+        
+        # Determine ref_audio path: tts config > soul voice config
+        tts_config = persona_config.tts or {}
+        ref_audio = tts_config.get("ref_audio")
+        
+        if not ref_audio and persona_config.soul_config:
+            # Get from soul config
+            soul = persona_config.soul_config
+            soul_audio_dir = os.path.join(_THIS_DIR, "souls", soul.name, "audio")
+            if os.path.isdir(soul_audio_dir):
+                # Look for any .wav file in the soul's audio directory
+                for f in os.listdir(soul_audio_dir):
+                    if f.endswith(".wav"):
+                        ref_audio = os.path.join(soul_audio_dir, f)
+                        print(f"  Using soul voice: {ref_audio}")
+                        break
+        
+        # Load voice prompt for this persona
+        voice_prompt = None
+        if ref_audio and os.path.exists(ref_audio):
+            voice_prompt = shared.load_voice(
+                name=identity.name,
+                audio_path=ref_audio,
+                voices_dir="voices",
+            )
+        else:
+            print(f"  Warning: No voice reference for {identity.name}")
+        
+        # System prompt was already loaded in config
+        system_prompt = identity.system_prompt or ""
+        
+        print(f"  Creating bot: {identity.name} as '{mumble_user}'")
+        
+        bot = MumbleVoiceBot(
+            host=config.mumble_host or "localhost",
+            port=config.mumble_port or 64738,
+            user=mumble_user,
+            password=config.mumble_password or "",
+            channel=mumble_channel,
+            device=device,
+            reference_audio=ref_audio or "reference.wav",
+            llm_system_prompt=system_prompt,
+            soul_config=persona_config.soul_config,
+            soul_name=identity.name,
+            # Shared services
+            shared_tts=shared.tts,
+            shared_stt=shared.stt,
+            shared_llm=shared.llm,
+            voice_prompt=voice_prompt,
+        )
+        bots.append(bot)
+    
+    # Start all bots
+    print(f"\n[Multi-Persona] Starting {len(bots)} bots...")
+    for bot in bots:
+        bot.start()
+    
+    # Print status
+    print(f"\n✓ Multi-persona bot running with {len(bots)} bots:")
+    for bot in bots:
+        print(f"  - {bot.user}")
+    print("\nPress Ctrl+C to stop.")
+
+    # Run forever
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n[Multi-Persona] Shutting down...")
+        for bot in bots:
+            bot._shutdown.set()
+        print("[Multi-Persona] Goodbye!")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Mumble Voice Bot - LLM-powered voice assistant'
@@ -2542,7 +2894,13 @@ def main():
         log_file=args.log_file,
     )
 
-    # Load config file if specified
+    # Check if this is a multi-persona config
+    if args.config and MULTI_PERSONA_AVAILABLE and is_multi_persona_config(args.config):
+        logger.info(f"Detected multi-persona config: {args.config}")
+        run_multi_persona_bot(args)
+        return  # Multi-persona mode handles its own run loop
+
+    # Load config file if specified (single-persona mode)
     config = None
     if args.config:
         try:
