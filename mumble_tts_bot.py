@@ -1983,6 +1983,12 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         if user_id == self.mumble.users.myself_session:
             return
 
+        # MULTI-BOT: Ignore ALL audio when ANY bot is speaking
+        # Other bots receive speech via broadcast_utterance (fake ASR), not real audio
+        # This prevents double-processing: real ASR + fake ASR on same speech
+        if self._shared_services and self._shared_services.any_bot_speaking():
+            return  # Bot is talking - ignore audio, we'll get text via fake ASR
+
         # CRITICAL: Ignore all audio while bot is speaking to prevent feedback
         # When bot speaks, users' microphones pick up the audio and send it back
         # This causes the bot to transcribe its own TTS output as user speech
