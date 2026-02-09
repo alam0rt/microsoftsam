@@ -1,6 +1,6 @@
 # Sauron Configuration for Mumble Voice Bot
 
-soul: "potion-seller"
+soul: "raf"
 
 llm:
   endpoint: "https://openrouter.ai/api/v1/chat/completions"
@@ -21,7 +21,6 @@ tts:
 mumble:
   host: "murmur.middleearth.samlockart.com"
   port: 64738
-  # user defaults to soul name (e.g., "Potion Seller" from soul.yaml)
 
 stt:
   provider: "nemotron_nemo"
