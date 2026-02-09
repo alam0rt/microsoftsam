@@ -582,6 +582,40 @@ class SharedBotServices:
         with self._speaking_lock:
             return self._speaking_count > 0
 
+    # =========================================================================
+    # Utterance Broadcasting (for bot-to-bot communication without ASR)
+    # =========================================================================
+    # When a bot speaks, it broadcasts the text. Other bots can "hear" this
+    # directly without doing ASR - like a perfect transcription.
+
+    def broadcast_utterance(self, speaker_name: str, text: str) -> None:
+        """Broadcast an utterance to all listening bots.
+
+        Called by a bot when it starts speaking. Other bots receive this
+        as a "perfect transcription" without needing ASR.
+
+        Args:
+            speaker_name: Name of the bot speaking.
+            text: What the bot is saying.
+        """
+        if not hasattr(self, '_utterance_listeners'):
+            self._utterance_listeners = []
+        for callback in self._utterance_listeners:
+            try:
+                callback(speaker_name, text)
+            except Exception:
+                pass  # Don't let one listener break others
+
+    def register_utterance_listener(self, callback) -> None:
+        """Register a callback to receive utterances from other bots.
+
+        Args:
+            callback: Function(speaker_name: str, text: str) to call when a bot speaks.
+        """
+        if not hasattr(self, '_utterance_listeners'):
+            self._utterance_listeners = []
+        self._utterance_listeners.append(callback)
+
     def load_voice(self, name: str, audio_path: str, voices_dir: str = "voices") -> dict:
         """Load and cache a voice prompt.
 
@@ -824,6 +858,10 @@ class MumbleVoiceBot:
         # Multi-bot coordination (shared echo filter so all bots know what all bots said)
         self._shared_echo_filter = shared_echo_filter
         self._shared_services = shared_services
+
+        # Register to receive utterances from other bots (fake ASR)
+        if self._shared_services:
+            self._shared_services.register_utterance_listener(self._on_bot_utterance)
 
         # Pending transcriptions (for accumulating long utterances)
         self.pending_text = {}  # user_id -> accumulated text
@@ -2177,6 +2215,47 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         except Exception as e:
             logger.error(f"Speech processing failed: {e}", exc_info=True)
 
+    def _on_bot_utterance(self, speaker_name: str, text: str) -> None:
+        """Handle an utterance broadcast from another bot.
+
+        This is "fake ASR" - we receive the text directly instead of
+        transcribing audio. Treats other bots like any other user.
+
+        Args:
+            speaker_name: Name of the bot that spoke (treated as user name).
+            text: What they said.
+        """
+        # Don't respond to our own utterances
+        if speaker_name == self.user:
+            return
+
+        # Don't respond if we're currently speaking
+        if self._speaking.is_set():
+            return
+
+        # Create a fake user_id based on speaker name (negative to avoid collision)
+        user_id = -hash(speaker_name) % 1000000
+
+        self.logger.info(f'Heard (from {speaker_name}): "{text[:50]}..."' if len(text) > 50 else f'Heard (from {speaker_name}): "{text}"')
+
+        # Add to conversation history (as if it was a user message)
+        self._add_to_channel_history("user", text, speaker_name)
+
+        # Store as pending text and maybe respond
+        current_time = time.time()
+        self.pending_text[user_id] = text
+        self.pending_text_time[user_id] = current_time
+
+        # Try to respond (with a small delay to let turn-taking work)
+        # Use a thread to avoid blocking the broadcast
+        def delayed_respond():
+            import time as time_module
+            time_module.sleep(0.5)  # Small delay for natural turn-taking
+            if not self._speaking.is_set():  # Still not speaking
+                self._maybe_respond(user_id, speaker_name, force=True)
+
+        threading.Thread(target=delayed_respond, daemon=True).start()
+
     def _maybe_respond(self, user_id: int, user_name: str, force: bool = False, tracker: 'LatencyTracker' = None):
         """Respond if we have pending text and enough time has passed."""
         if user_id not in self.pending_text:
@@ -2389,6 +2468,11 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         # This way we'll recognize it if it's picked up by STT during/after playback
         if self.echo_filter:
             self.echo_filter.add_output(text)
+
+        # Broadcast utterance to other bots (they receive it as "fake ASR")
+        # This lets bots hear each other without actual audio processing
+        if self._shared_services:
+            self._shared_services.broadcast_utterance(self.user, text)
 
         self._speaking.set()
         # Notify shared services that this bot started speaking (for multi-bot barge-in suppression)
