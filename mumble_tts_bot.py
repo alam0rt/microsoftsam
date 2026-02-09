@@ -2504,25 +2504,33 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
         # Look up the speaker's Mumble session ID (treat bots as real users)
         user_id = self._get_session_id_by_name(speaker_name)
-        user_name = speaker_name
 
-        # === Same logic as user speech (post-ASR) ===
-        # We have perfect text from broadcast, no ASR needed
+        # Try to claim this response - only one bot should respond
+        if not self._shared_services.try_claim_response(user_id, text):
+            self.logger.debug(f"Someone else responding to bot: {text[:30]}...")
+            return
 
-        # Echo filter not needed - bots don't echo each other's speech via audio
-        # Utterance classifier not needed - bot speech is already filtered at source
+        # The bot's message is ALREADY in the journal (from broadcast_utterance).
+        # We just need to generate a response - don't add anything to history.
+        self.logger.info(f'Generating response for {speaker_name}: "{text}"')
 
-        # Store pending text exactly like user speech
-        current_time = time.time()
-        if user_id in self.pending_text:
-            self.pending_text[user_id] += " " + text
-        else:
-            self.pending_text[user_id] = text
-        self.pending_text_time[user_id] = current_time
+        # Generate response directly - the journal already has the context
+        if self.llm:
+            # Set our system prompt on the shared LLM
+            if hasattr(self, '_bot_system_prompt') and self._bot_system_prompt:
+                self.llm.system_prompt = self._bot_system_prompt
 
-        # Respond using normal flow (same as user speech after silence detection)
-        # force=True because we have complete utterance (like silence-triggered response)
-        self._maybe_respond(user_id, user_name, force=True)
+            # Build messages from journal (bot's message is already there)
+            messages = self._build_llm_messages()
+
+            # Generate response
+            response = self._run_coro_sync(
+                self.llm.chat(messages, bot_name=self.user)
+            )
+
+            if response.content:
+                # Speak the response (this will also broadcast it to other bots)
+                self._speak_sync(response.content)
 
     def _get_session_id_by_name(self, name: str) -> int:
         """Look up a user's Mumble session ID by their name.
