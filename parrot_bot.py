@@ -92,9 +92,11 @@ class ParrotBot:
         password: str = None,
         channel: str = None,
         device: str = "cuda",
-        asr_threshold: int = 2000,
+        asr_threshold: int = 1500,  # Lower default for better sensitivity
         min_speech_duration: float = 0.5,
         silence_timeout: float = 1.5,
+        speech_hold_duration: float = 0.3,  # Keep buffering for 300ms after RMS drops
+        debug_rms: bool = False,  # Print RMS debug bar
         # Shared services (optional - used when running in multi-persona mode)
         shared_tts=None,
         shared_stt=None,
@@ -108,6 +110,8 @@ class ParrotBot:
         self.asr_threshold = asr_threshold
         self.min_speech_duration = min_speech_duration
         self.silence_timeout = silence_timeout
+        self.speech_hold_duration = speech_hold_duration
+        self.debug_rms = debug_rms
 
         # Setup logging
         self.logger = logging.getLogger(f"parrot.{user}")
@@ -142,6 +146,8 @@ class ParrotBot:
         self.user_audio_buffers = {}  # user_id -> list of PCM chunks
         self.user_last_audio_time = {}  # user_id -> timestamp
         self.user_is_speaking = {}  # user_id -> bool
+        self.speech_active_until = {}  # user_id -> timestamp (for hold duration)
+        self._audio_senders = {}  # Track first audio from users
 
         # Mumble client
         self.mumble = None
@@ -174,6 +180,8 @@ class ParrotBot:
         
         self.mumble.start()
         self.mumble.is_ready()
+        
+        self.logger.info(f"[VAD] Listening for voice (threshold: {self.asr_threshold})")
         
         # Join channel if specified
         if self.channel:
@@ -223,52 +231,89 @@ class ParrotBot:
         rms = pcm_rms(sound_chunk.pcm)
         self._max_rms = max(rms, self._max_rms)
         
-        # Initialize buffer for new users
+        # Log first audio from each user
+        if user_id not in self._audio_senders:
+            self._audio_senders[user_id] = user_name
+            self.logger.info(f"First audio from {user_name} (session={user_id}, RMS={rms})")
+        
+        # Debug RMS display
+        if self.debug_rms:
+            bar_width = min(rms // 100, 50)
+            threshold_pos = min(self.asr_threshold // 100, 50)
+            bar = '-' * threshold_pos + '+' * max(0, bar_width - threshold_pos) if rms >= self.asr_threshold else '-' * bar_width
+            print(f'\\r[{user_name:12}] RMS: {rms:5d} / {self._max_rms:5d}  |{bar:<50}|', end='', flush=True)
+        
+        # Initialize state for new users
         if user_id not in self.user_audio_buffers:
             self.user_audio_buffers[user_id] = []
             self.user_is_speaking[user_id] = False
+            self.speech_active_until[user_id] = 0
         
-        # Voice activity detection
+        current_time = time.time()
+        
+        # Speech detection with hold duration (like main bot)
         if rms >= self.asr_threshold:
-            if not self.user_is_speaking.get(user_id):
-                self.logger.debug(f"{user_name} started speaking (RMS={rms})")
-                self.user_is_speaking[user_id] = True
+            if not self.user_audio_buffers[user_id]:
+                # Starting new speech
+                self.logger.info(f"{user_name} started speaking (RMS={rms})")
             
-            # Buffer the audio
             self.user_audio_buffers[user_id].append(sound_chunk.pcm)
-            self.user_last_audio_time[user_id] = time.time()
+            self.user_is_speaking[user_id] = True
+            self.speech_active_until[user_id] = current_time + self.speech_hold_duration
+            self.user_last_audio_time[user_id] = current_time
+        else:
+            # Below threshold - check if we're in hold period
+            if current_time < self.speech_active_until.get(user_id, 0):
+                # Still in hold period, keep buffering
+                self.user_audio_buffers[user_id].append(sound_chunk.pcm)
+                self.user_last_audio_time[user_id] = current_time
+            elif self.user_audio_buffers[user_id]:
+                # Speech ended - process it
+                if self.debug_rms:
+                    print()  # Newline after RMS bar
+                
+                self.user_is_speaking[user_id] = False
+                audio_chunks = list(self.user_audio_buffers[user_id])
+                self.user_audio_buffers[user_id] = []
+                
+                self.logger.info(f"{user_name} stopped speaking, processing {len(audio_chunks)} chunks")
+                
+                # Process in background
+                self._executor.submit(
+                    self._process_utterance, user_id, user_name, audio_chunks
+                )
 
     def _silence_checker(self):
-        """Check for silence and process completed utterances."""
+        """Backup checker for silence - processes audio if no new packets arrive."""
         while not self._shutdown.is_set():
-            time.sleep(0.1)
+            time.sleep(0.2)  # Check every 200ms
             current_time = time.time()
             
-            for user_id in list(self.user_is_speaking.keys()):
-                if not self.user_is_speaking.get(user_id):
+            for user_id in list(self.user_audio_buffers.keys()):
+                # Check if there's buffered audio that hasn't been processed
+                audio_chunks = self.user_audio_buffers.get(user_id, [])
+                if not audio_chunks:
                     continue
                 
                 last_audio = self.user_last_audio_time.get(user_id, 0)
+                # If no audio for silence_timeout, force process
                 if current_time - last_audio >= self.silence_timeout:
-                    # User stopped speaking
                     self.user_is_speaking[user_id] = False
-                    
-                    # Get the buffered audio
-                    audio_chunks = self.user_audio_buffers.get(user_id, [])
                     self.user_audio_buffers[user_id] = []
                     
-                    if audio_chunks:
-                        # Get user info
-                        try:
-                            user = self.mumble.users[user_id]
-                            user_name = user.get('name', 'Unknown')
-                        except:
-                            user_name = 'Unknown'
-                        
-                        # Process in background
-                        self._executor.submit(
-                            self._process_utterance, user_id, user_name, audio_chunks
-                        )
+                    # Get user info
+                    try:
+                        user = self.mumble.users[user_id]
+                        user_name = user.get('name', 'Unknown')
+                    except:
+                        user_name = self._audio_senders.get(user_id, 'Unknown')
+                    
+                    self.logger.info(f"Silence timeout: processing {len(audio_chunks)} chunks from {user_name}")
+                    
+                    # Process in background
+                    self._executor.submit(
+                        self._process_utterance, user_id, user_name, list(audio_chunks)
+                    )
 
     def _process_utterance(self, user_id: int, user_name: str, audio_chunks: list):
         """Process a completed utterance: transcribe and echo back."""
