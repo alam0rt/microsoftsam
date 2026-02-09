@@ -100,6 +100,22 @@ responses:
     - "Oh, sorry."
     - "Go ahead."
   
+  # When someone talks for a really long time (>15s) then stops
+  long_speech_ended:
+    - "Wow, that was a lot!"
+    - "Got it, that was quite a speech!"
+  
+  # When the channel has been quiet for a while (>60s)
+  channel_quiet:
+    - "It's quiet in here."
+    - "Anyone still around?"
+  
+  # When the LLM API is rate limited
+  rate_limited:
+    - "Give me a moment..."
+    - "Hold on, I'm thinking..."
+    - "Go ahead."
+  
   # Optional: when user joins channel (can be noisy, disabled by default)
   # user_joined:
   #   - "Welcome, {user}!"

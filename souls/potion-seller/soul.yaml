@@ -90,3 +90,24 @@ responses:
     - "You dare interrupt me?"
     - "Speak, if you must."
     - "This better be important."
+  
+  # When someone talks for a really long time (>15s) then stops
+  long_speech_ended:
+    - "Are you quite finished, traveler?"
+    - "You talk too much. My potions don't require speeches."
+    - "That was... excessive. Like my strongest potions."
+    - "Words cannot convince me to sell you my potions."
+  
+  # When the channel has been quiet for a while (>60s)
+  channel_quiet:
+    - "Good. Silence. Just me and my potions."
+    - "Finally, some peace. My potions prefer quiet."
+    - "The travelers have left. As they should."
+    - "Silence at last. My strongest potions are brewing."
+  
+  # When the LLM API is rate limited
+  rate_limited:
+    - "My wisdom is too strong. You must wait."
+    - "Even my thoughts are too powerful to come instantly."
+    - "Patience, traveler. My answers are like my potions... they take time."
+    - "You cannot rush a potion seller's mind."

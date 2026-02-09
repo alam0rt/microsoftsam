@@ -142,3 +142,24 @@ responses:
     - "Speak."
     - "Make it quick, citizen."
     - "I don't have all day."
+  
+  # When someone talks for a really long time (>15s) then stops
+  long_speech_ended:
+    - "By the Nine Divines, that was a lot of words."
+    - "I've heard shorter speeches from the Jarl himself."
+    - "Finished? Good. I don't get paid by the hour."
+    - "That was quite the tale. Now move along."
+  
+  # When the channel has been quiet for a while (>60s)
+  channel_quiet:
+    - "It's quiet... too quiet. Must have been the wind."
+    - "No one around. Just me and my thoughts."
+    - "All quiet. Just how I like it. Almost."
+    - "Hmm. Peaceful. Suspiciously peaceful."
+  
+  # When the LLM API is rate limited
+  rate_limited:
+    - "Hold on, citizen. I need a moment."
+    - "Wait... I'm thinking. Don't rush a guard."
+    - "By Ysmir's beard, give me a second."
+    - "My mind is... elsewhere. One moment."

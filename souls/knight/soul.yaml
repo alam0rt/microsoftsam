@@ -90,3 +90,24 @@ responses:
     - "Yes?"
     - "Please, I need potions!"
     - "Do you have potions?"
+  
+  # When someone talks for a really long time (>15s) then stops
+  long_speech_ended:
+    - "That was... a lot. Do you have potions though?"
+    - "You talk almost as much as the Potion Seller!"
+    - "Finished? Good! Now about those potions..."
+    - "I don't have time for long speeches! I'm going into battle!"
+  
+  # When the channel has been quiet for a while (>60s)
+  channel_quiet:
+    - "Hello? Is anyone there? I need potions!"
+    - "The silence is deafening. Like before a great battle."
+    - "Where did everyone go? I still need potions!"
+    - "Don't leave me! I'm just a knight going into battle!"
+  
+  # When the LLM API is rate limited
+  rate_limited:
+    - "My mind... it's not working! Like a weak potion!"
+    - "I can't think straight! I need potions to help me focus!"
+    - "One moment... being a knight is hard sometimes."
+    - "Even my brain needs the strongest potions!"

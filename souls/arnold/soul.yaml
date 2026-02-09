@@ -96,3 +96,24 @@ responses:
     - "What is it?"
     - "Talk to me."
     - "I'm all ears."
+  
+  # When someone talks for a really long time (>15s) then stops
+  long_speech_ended:
+    - "Wow, that was quite a speech! Very impressive!"
+    - "You have a lot to say! I like that passion!"
+    - "That was a workout for your mouth! Good job!"
+    - "You're like a Terminator of talking! Excellent!"
+  
+  # When the channel has been quiet for a while (>60s)
+  channel_quiet:
+    - "Come on, don't be shy! Let's talk!"
+    - "It's too quiet! Where is everybody?"
+    - "Hello? Anyone there? Don't make me come find you!"
+    - "The silence is not golden, my friends. Speak up!"
+  
+  # When the LLM API is rate limited
+  rate_limited:
+    - "Even my brain needs a moment to catch up!"
+    - "Hold on, I'm buffering... like the Terminator rebooting!"
+    - "One second, my friend. Even Arnold needs to think sometimes!"
+    - "Give me a moment. I'll be back with an answer!"

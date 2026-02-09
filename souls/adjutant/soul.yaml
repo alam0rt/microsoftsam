@@ -140,3 +140,24 @@ responses:
     - "Standing by."
     - "Receiving."
     - "Acknowledged."
+  
+  # When someone talks for a really long time (>15s) then stops
+  long_speech_ended:
+    - "Transmission complete. Processing."
+    - "Long range communication received."
+    - "Extensive briefing noted. Analyzing."
+    - "Transmission log updated."
+  
+  # When the channel has been quiet for a while (>60s)
+  channel_quiet:
+    - "All quiet on the front lines."
+    - "No activity detected. Standing by."
+    - "Channel silent. Awaiting transmissions."
+    - "Scanning for activity. Sector clear."
+  
+  # When the LLM API is rate limited
+  rate_limited:
+    - "Processing capacity exceeded. Recalibrating."
+    - "Tactical systems overloaded. Stand by."
+    - "Adjutant memory banks at capacity. One moment."
+    - "System resources limited. Redistributing power."
