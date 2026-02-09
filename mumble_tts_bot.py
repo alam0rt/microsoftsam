@@ -93,6 +93,20 @@ except ImportError as e:
     LATENCY_TRACKING_AVAILABLE = False
     logger.warning(f"Latency tracking not available: {e}")
 
+# Import speech filtering components (echo filter, utterance classifier, turn predictor)
+try:
+    from mumble_voice_bot.speech_filter import EchoFilter, TurnPredictor, UtteranceClassifier
+    from mumble_voice_bot.conversation_state import ConversationState, ConversationStateMachine
+    SPEECH_FILTER_AVAILABLE = True
+except ImportError as e:
+    SPEECH_FILTER_AVAILABLE = False
+    EchoFilter = None
+    UtteranceClassifier = None
+    TurnPredictor = None
+    ConversationState = None
+    ConversationStateMachine = None
+    logger.warning(f"Speech filtering not available: {e}")
+
 # Import performance improvements (Phase 1-3 from docs/perf.md)
 try:
     from mumble_voice_bot.perf import (
@@ -569,6 +583,13 @@ class MumbleVoiceBot:
         self._asr_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ASR")  # Allow 2 workers
         self._tts_lock = threading.Lock()
 
+        # Speech filtering components (echo filter, utterance classifier, turn predictor)
+        self.echo_filter = None
+        self.utterance_classifier = None
+        self.turn_predictor = None
+        self.conversation_state_machine = None
+        self._speech_filter_config = None  # Will be populated from config
+
         # Turn ID coordination and bounded TTS queue (Phase 1 from docs/perf.md)
         if PERF_AVAILABLE:
             self._turn_coordinator = TurnIdCoordinator()
@@ -692,6 +713,9 @@ class MumbleVoiceBot:
             print(f"[Warning] Unknown STT provider: {stt_provider}")
             print("[STT] Falling back to local Whisper")
             self.stt_provider = "local"
+
+        # Initialize speech filters (echo detection, utterance classification, turn prediction)
+        self._init_speech_filters()
 
         # Initialize LLM
         self.llm = None
@@ -1003,6 +1027,93 @@ Keep responses to 1-2 sentences. Use casual language and contractions.
 Sound like a friend chatting, not a corporate assistant.
 Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
+    def _init_speech_filters(self) -> None:
+        """Initialize speech filtering components.
+
+        These components help prevent:
+        - Echo detection (bot responding to its own TTS output)
+        - Non-meaningful utterances (fillers, very short fragments)
+        - Poor turn-taking (responding too early/late)
+        """
+        if not SPEECH_FILTER_AVAILABLE:
+            print("[Speech] Speech filtering not available")
+            return
+
+        # Load config from file if available
+        config = None
+        try:
+            config = load_config()
+        except Exception:
+            pass
+
+        # Get bot config settings
+        bot_config = config.bot if config else None
+
+        # Initialize echo filter
+        echo_enabled = getattr(bot_config, 'echo_filter_enabled', True) if bot_config else True
+        if echo_enabled:
+            decay_time = getattr(bot_config, 'echo_filter_decay', 3.0) if bot_config else 3.0
+            self.echo_filter = EchoFilter(decay_time=decay_time)
+            print(f"[Speech] Echo filter enabled (decay={decay_time}s)")
+        else:
+            print("[Speech] Echo filter disabled")
+
+        # Initialize utterance classifier
+        utterance_enabled = getattr(bot_config, 'utterance_filter_enabled', True) if bot_config else True
+        if utterance_enabled:
+            min_words = getattr(bot_config, 'utterance_min_words', 2) if bot_config else 2
+            min_chars = getattr(bot_config, 'utterance_min_chars', 5) if bot_config else 5
+            self.utterance_classifier = UtteranceClassifier(
+                min_words=min_words,
+                min_chars=min_chars,
+            )
+            print(f"[Speech] Utterance filter enabled (min_words={min_words}, min_chars={min_chars})")
+        else:
+            print("[Speech] Utterance filter disabled")
+
+        # Initialize turn predictor
+        turn_enabled = getattr(bot_config, 'turn_prediction_enabled', True) if bot_config else True
+        if turn_enabled:
+            base_delay = getattr(bot_config, 'turn_prediction_base_delay', 0.3) if bot_config else 0.3
+            max_delay = getattr(bot_config, 'turn_prediction_max_delay', 1.5) if bot_config else 1.5
+            self.turn_predictor = TurnPredictor(
+                base_delay=base_delay,
+                max_delay=max_delay,
+            )
+            print(f"[Speech] Turn predictor enabled (base={base_delay}s, max={max_delay}s)")
+        else:
+            print("[Speech] Turn predictor disabled")
+
+        # Initialize conversation state machine
+        state_enabled = getattr(bot_config, 'state_machine_enabled', True) if bot_config else True
+        if state_enabled:
+            cooldown = getattr(bot_config, 'state_machine_cooldown', 0.5) if bot_config else 0.5
+            self.conversation_state_machine = ConversationStateMachine(
+                cooldown_duration=cooldown,
+                on_state_change=self._on_conversation_state_change,
+            )
+            print(f"[Speech] State machine enabled (cooldown={cooldown}s)")
+        else:
+            print("[Speech] State machine disabled")
+
+    def _on_conversation_state_change(
+        self,
+        old_state: "ConversationState",
+        new_state: "ConversationState",
+        reason: str,
+    ) -> None:
+        """Callback for conversation state changes.
+
+        Args:
+            old_state: Previous state.
+            new_state: New state.
+            reason: Reason for the transition.
+        """
+        logger.debug(
+            f"Conversation state: {old_state.name} -> {new_state.name}",
+            extra={"reason": reason},
+        )
+
     def _init_tools(self) -> None:
         """Initialize the tool registry with available tools.
 
@@ -1128,7 +1239,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             return self._current_soul_name
         return None
 
-    async def _switch_soul(self, soul_name: str) -> str:
+    async def _switch_soul(self, soul_name: str, preserve_context: bool = None) -> str:
         """Switch to a different soul/personality.
 
         This updates:
@@ -1138,17 +1249,40 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
         Args:
             soul_name: Name of the soul directory to switch to.
+            preserve_context: Whether to preserve conversation history.
+                             If None, uses config.bot.preserve_context_on_switch.
 
         Returns:
             Success or error message.
         """
-        from mumble_voice_bot.config import load_soul_config
+        from mumble_voice_bot.config import load_config, load_soul_config
 
         souls_dir = os.path.join(_THIS_DIR, "souls")
         soul_path = os.path.join(souls_dir, soul_name)
 
         if not os.path.exists(soul_path):
             return f"Soul '{soul_name}' not found."
+
+        # Determine if we should preserve context
+        if preserve_context is None:
+            try:
+                config = load_config()
+                preserve_context = getattr(config.bot, 'preserve_context_on_switch', True)
+                max_preserved = getattr(config.bot, 'max_preserved_messages', 10)
+            except Exception:
+                preserve_context = True
+                max_preserved = 10
+        else:
+            max_preserved = 10
+
+        # Store current context before switch (only user/assistant messages)
+        preserved_messages = []
+        if preserve_context and self.channel_history:
+            preserved_messages = [
+                msg for msg in self.channel_history
+                if msg.get('role') in ('user', 'assistant')
+            ][-max_preserved:]
+            logger.info(f"Preserving {len(preserved_messages)} messages across soul switch")
 
         try:
             # Load the new soul config
@@ -1194,10 +1328,14 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             self.soul_config = new_soul
             self._current_soul_name = soul_name
 
-            # Clear conversation history for fresh start
+            # Clear conversation history and restore preserved messages
             self.channel_history = []
+            if preserved_messages:
+                self.channel_history.extend(preserved_messages)
+                logger.info(f"Restored {len(preserved_messages)} messages to new soul context")
 
-            return f"Switched to {new_soul.name}. Voice and personality updated."
+            context_msg = f" ({len(preserved_messages)} messages preserved)" if preserved_messages else ""
+            return f"Switched to {new_soul.name}. Voice and personality updated.{context_msg}"
 
         except Exception as e:
             logger.error(f"Failed to switch soul: {e}")
@@ -1686,6 +1824,20 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             if transcribe_time > 2.0:
                 logger.warning(f"ASR slow: {transcribe_time*1000:.0f}ms (>2s)")
 
+            # --- Speech Filtering ---
+
+            # Echo filter: check if this is the bot's own speech being picked up
+            if self.echo_filter and self.echo_filter.is_echo(text):
+                logger.debug(f"Echo filter: ignoring '{text}' (matches recent bot output)")
+                return
+
+            # Utterance classifier: check if this is meaningful speech
+            if self.utterance_classifier and not self.utterance_classifier.is_meaningful(text):
+                logger.debug(f"Utterance filter: ignoring '{text}' (not meaningful)")
+                return
+
+            # --- End Speech Filtering ---
+
             # Accumulate text
             current_time = time.time()
             if user_id in self.pending_text:
@@ -1717,12 +1869,32 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         current_time = time.time()
         time_since_last = current_time - self.pending_text_time.get(user_id, 0)
 
+        # Use turn predictor if available to determine response timing
+        accumulated_text = self.pending_text.get(user_id, "")
+        if self.turn_predictor and not force:
+            if not self.turn_predictor.should_respond(accumulated_text, time_since_last):
+                logger.debug(f"Turn predictor: waiting for turn completion")
+                return
+
         # Respond if forced or if enough time has passed
         if force or time_since_last >= self.pending_text_timeout:
             text = self.pending_text.pop(user_id, "")
             speech_end_time = self.pending_text_time.pop(user_id, current_time)
 
             if text and self.llm:
+                # Transition state machine to THINKING
+                if self.conversation_state_machine:
+                    # First ensure we're in LISTENING state
+                    if self.conversation_state_machine.state == ConversationState.IDLE:
+                        self.conversation_state_machine.transition_sync(
+                            ConversationState.LISTENING,
+                            reason="user speech detected",
+                        )
+                    self.conversation_state_machine.transition_sync(
+                        ConversationState.THINKING,
+                        reason="generating response",
+                    )
+
                 # Track when user finished speaking for staleness detection
                 pipeline_start = time.time()
 
@@ -1889,7 +2061,20 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         text = _pad_tts_text(text)
         if not text:
             return
+
+        # Record this output for echo filtering BEFORE speaking
+        # This way we'll recognize it if it's picked up by STT during/after playback
+        if self.echo_filter:
+            self.echo_filter.add_output(text)
+
         self._speaking.set()
+
+        # Update conversation state machine
+        if self.conversation_state_machine:
+            self.conversation_state_machine.transition_sync(
+                ConversationState.SPEAKING,
+                reason="starting TTS",
+            )
 
         # Clear all audio buffers and pending text when starting to speak
         # This prevents processing stale audio that was buffered before we started speaking
@@ -1991,6 +2176,18 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             # Reset turn controller to idle
             if self.turn_controller:
                 self.turn_controller.reset()
+
+            # Transition state machine to COOLDOWN then back to IDLE/LISTENING
+            if self.conversation_state_machine:
+                self.conversation_state_machine.transition_sync(
+                    ConversationState.COOLDOWN,
+                    reason="TTS finished",
+                )
+                # After cooldown, go back to IDLE
+                self.conversation_state_machine.transition_sync(
+                    ConversationState.IDLE,
+                    reason="cooldown complete",
+                )
 
     def _stats_logger(self):
         """Background thread that logs stats periodically."""

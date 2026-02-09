@@ -46,6 +46,36 @@ bot:
   enable_conversation: true   # Enable LLM conversation mode
   conversation_timeout: 300   # Clear history after 5 minutes of inactivity
   max_response_staleness: 5.0 # Skip responses older than this (increase for slow LLM)
+  barge_in_enabled: false     # Allow users to interrupt bot mid-speech
+
+  # --- Speech Filtering (Phase 1-2 of Better Speech Plan) ---
+  # These filters improve conversation quality by preventing:
+  # - Bot responding to echoes of its own TTS output
+  # - Bot responding to non-meaningful utterances (um, uh, okay, etc.)
+  # - Poor turn-taking timing
+
+  # Echo filter: prevents responding to bot's own speech picked up by STT
+  echo_filter_enabled: true   # Enable echo detection
+  echo_filter_decay: 3.0      # How long to remember bot outputs (seconds)
+
+  # Utterance filter: filters out non-meaningful speech
+  utterance_filter_enabled: true  # Enable utterance classification
+  utterance_min_words: 2          # Minimum words for meaningful speech
+  utterance_min_chars: 5          # Minimum characters for meaningful speech
+
+  # Turn prediction: natural response timing based on speech patterns
+  turn_prediction_enabled: true       # Enable turn prediction heuristics
+  turn_prediction_base_delay: 0.3     # Base delay before responding (seconds)
+  turn_prediction_max_delay: 1.5      # Maximum delay to wait (seconds)
+  turn_prediction_threshold: 0.7      # Confidence threshold for turn completion (0-1)
+
+  # Conversation state machine: proper turn-taking state management
+  state_machine_enabled: true     # Enable state machine for turn management
+  state_machine_cooldown: 0.5     # Cooldown after speaking (seconds)
+
+  # Context preservation on soul switch
+  preserve_context_on_switch: true  # Keep conversation history when switching souls
+  max_preserved_messages: 10        # Maximum messages to preserve across switch
 
 # Speech-to-Text configuration
 stt:

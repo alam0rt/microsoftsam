@@ -140,6 +140,17 @@ class PipelineBotConfig:
                                Increase if TTS is being skipped due to slow LLM.
         barge_in_enabled: Allow users to interrupt the bot mid-speech.
                          When False, bot talks over everyone without interruption.
+        echo_filter_enabled: Enable echo filtering to ignore bot's own speech.
+        echo_filter_decay: How long to remember bot outputs for echo detection (seconds).
+        utterance_filter_enabled: Enable filtering of non-meaningful utterances.
+        utterance_min_words: Minimum words for a meaningful utterance.
+        utterance_min_chars: Minimum characters for a meaningful utterance.
+        turn_prediction_enabled: Enable turn prediction for natural response timing.
+        turn_prediction_base_delay: Base delay before responding (seconds).
+        turn_prediction_max_delay: Maximum delay to wait for turn completion (seconds).
+        turn_prediction_threshold: Confidence threshold for turn completion (0-1).
+        state_machine_enabled: Enable conversation state machine for turn management.
+        state_machine_cooldown: Cooldown duration after speaking (seconds).
     """
     wake_word: str | None = None
     silence_threshold_ms: int = 1500
@@ -149,6 +160,29 @@ class PipelineBotConfig:
     conversation_timeout: float = 300.0  # 5 minutes
     max_response_staleness: float = 5.0  # Skip responses older than this
     barge_in_enabled: bool = False  # Disabled by default - bot talks over everyone
+
+    # Echo filtering - prevents responding to bot's own TTS output
+    echo_filter_enabled: bool = True
+    echo_filter_decay: float = 3.0  # seconds
+
+    # Utterance filtering - filters out non-meaningful speech
+    utterance_filter_enabled: bool = True
+    utterance_min_words: int = 2
+    utterance_min_chars: int = 5
+
+    # Turn prediction - natural response timing
+    turn_prediction_enabled: bool = True
+    turn_prediction_base_delay: float = 0.3  # seconds
+    turn_prediction_max_delay: float = 1.5  # seconds
+    turn_prediction_threshold: float = 0.7  # confidence threshold
+
+    # Conversation state machine
+    state_machine_enabled: bool = True
+    state_machine_cooldown: float = 0.5  # seconds
+
+    # Context preservation on soul switch
+    preserve_context_on_switch: bool = True  # Keep conversation history when switching souls
+    max_preserved_messages: int = 10  # Maximum messages to preserve across switch
 
 
 @dataclass
