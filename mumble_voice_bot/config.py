@@ -333,6 +333,9 @@ class SoulFallbacks:
         acknowledgments: Brief acknowledgments for commands/requests.
         idle_chatter: Random things the bot might say when idle.
         errors: Responses when something goes wrong.
+        thinking: Quick fillers when processing a question (bypasses LLM).
+        still_thinking: Fillers when LLM is taking too long.
+        interrupted: What to say when barged-in on (user interrupts bot).
     """
     greetings: list[str] = field(default_factory=lambda: [
         "Hey {user}!",
@@ -354,6 +357,24 @@ class SoulFallbacks:
         "Hmm, something went wrong.",
         "Uh, I'm having trouble with that.",
         "Sorry, I can't do that right now.",
+    ])
+    # Conversation fillers - short utterances that bypass LLM for natural flow
+    thinking: list[str] = field(default_factory=lambda: [
+        "Hmm...",
+        "Let me think...",
+        "Umm...",
+        "One sec...",
+    ])
+    still_thinking: list[str] = field(default_factory=lambda: [
+        "Still thinking...",
+        "Bear with me...",
+        "Hmm, let me see...",
+    ])
+    interrupted: list[str] = field(default_factory=lambda: [
+        "Oh, sorry.",
+        "Go ahead.",
+        "Yes?",
+        "Mm?",
     ])
 
 
@@ -518,6 +539,9 @@ def load_soul_config(
         ),
         idle_chatter=fallbacks_data.get("idle_chatter", []),
         errors=fallbacks_data.get("errors", default_fallbacks.errors),
+        thinking=fallbacks_data.get("thinking", default_fallbacks.thinking),
+        still_thinking=fallbacks_data.get("still_thinking", default_fallbacks.still_thinking),
+        interrupted=fallbacks_data.get("interrupted", default_fallbacks.interrupted),
     )
 
     return SoulConfig(

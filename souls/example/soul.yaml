@@ -75,3 +75,21 @@ fallbacks:
     - "Hmm, something went wrong."
     - "Uh, I'm having trouble with that."
     - "Sorry, I can't do that right now."
+  
+  # Conversational fillers (optional - these have good defaults)
+  # Quick thinking phrases when processing questions
+  thinking:
+    - "Hmm..."
+    - "Let me think..."
+    - "Umm..."
+  
+  # Phrases when LLM is taking a long time (>5s)
+  still_thinking:
+    - "Still thinking..."
+    - "Bear with me..."
+  
+  # What to say when interrupted (barge-in)
+  interrupted:
+    - "Oh, sorry."
+    - "Go ahead."
+    - "Yes?"

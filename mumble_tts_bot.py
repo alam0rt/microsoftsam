@@ -1073,6 +1073,8 @@ class MumbleVoiceBot:
         if LATENCY_TRACKING_AVAILABLE:
             self.latency_logger = LatencyLogger()  # In-memory only
             self.turn_controller = TurnController()
+            # Register barge-in callback to speak interruption acknowledgment
+            self.turn_controller.on_barge_in(self._on_barge_in)
             print("[Latency] Tracking enabled (in-memory)")
         else:
             self.latency_logger = None
@@ -1080,6 +1082,10 @@ class MumbleVoiceBot:
 
         # Current latency tracker for in-progress turn
         self._current_tracker: LatencyTracker = None
+
+        # Filler state tracking
+        self._llm_thinking_since: float | None = None  # When LLM call started (for "still thinking" timer)
+        self._still_thinking_timer: threading.Timer | None = None
 
         # Stats tracking
         self._stats_interval = 30  # Log stats every 30 seconds
@@ -1935,31 +1941,61 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         """Build LLM message list from the shared event journal.
 
         Creates a natural conversation flow where the LLM can see
-        what everyone said, not just the current speaker.
+        what everyone said, including context about what's happening
+        (interruptions, who's present, etc.).
 
         Uses the unified journal from SharedBotServices as the single source of truth.
         """
         messages = []
 
-        # Add time/channel context as a system message
-        time_ctx = self._get_time_context()
-        channel_ctx = self._get_channel_context()
-
+        # Get full journal with all events (not just messages)
+        journal = self._shared_services.get_journal_for_llm(max_events=50)
+        
+        # Build a rich context block that tells the LLM what's happening
         context_parts = []
+        
+        # Time context
+        time_ctx = self._get_time_context()
         if time_ctx:
             context_parts.append(f"Current time: {time_ctx}")
+        
+        # Channel context (who's present)
+        channel_ctx = self._get_channel_context()
         if channel_ctx:
             context_parts.append(f"Channel: {channel_ctx}")
-
+        
+        # Recent events summary (joins/leaves/interruptions in last 60s)
+        recent_events = []
+        for e in journal:
+            if e.get("seconds_ago", 999) > 60:
+                continue
+            event_type = e.get("event", "")
+            speaker = e.get("speaker", "someone")
+            
+            if event_type == "user_joined":
+                recent_events.append(f"{speaker} just joined")
+            elif event_type == "user_left":
+                recent_events.append(f"{speaker} just left")
+            elif event_type == "interrupted":
+                recent_events.append(f"{speaker} was interrupted")
+            elif event_type == "started_speaking":
+                # Could note who started speaking
+                pass
+        
+        if recent_events:
+            context_parts.append(f"Recent: {', '.join(recent_events[-3:])}")  # Last 3 events
+        
         if context_parts:
             messages.append({
                 "role": "system",
                 "content": " | ".join(context_parts)
             })
 
-        # Get conversation history from the unified journal
+        # Get conversation messages from the journal
         history = self._shared_services.get_recent_messages_for_llm(max_messages=20)
         messages.extend(history)
+
+        return messages
 
         return messages
 
@@ -2461,15 +2497,24 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                     waited += 0.5
                     continue
                 # Nobody speaking - try to respond
-                self._maybe_respond(user_id, speaker_name, force=True)
+                # skip_history_add=True because bot_message is already logged by broadcast_utterance
+                self._maybe_respond(user_id, speaker_name, force=True, skip_history_add=True)
                 return
             
             self.logger.debug(f"Gave up waiting to respond to {speaker_name}")
 
         threading.Thread(target=delayed_respond, daemon=True).start()
 
-    def _maybe_respond(self, user_id: int, user_name: str, force: bool = False, tracker: 'LatencyTracker' = None):
-        """Respond if we have pending text and enough time has passed."""
+    def _maybe_respond(self, user_id: int, user_name: str, force: bool = False, tracker: 'LatencyTracker' = None, skip_history_add: bool = False):
+        """Respond if we have pending text and enough time has passed.
+        
+        Args:
+            user_id: ID of the user/bot speaking.
+            user_name: Name of the speaker.
+            force: Force immediate response.
+            tracker: Latency tracker.
+            skip_history_add: If True, don't add to history (e.g., bot-to-bot where message already logged).
+        """
         if user_id not in self.pending_text:
             return
 
@@ -2521,11 +2566,25 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                     return
 
                 self.logger.info(f'Generating response for {user_name}: "{text}"')
+                
+                # Speak a thinking filler if this looks like a question
+                # This fills the gap while LLM processes and feels more natural
+                if self._is_question(text):
+                    self.logger.debug("Detected question - speaking thinking filler")
+                    self._speak_filler('thinking')
+                
+                # Start "still thinking" timer in case LLM is slow
+                self._llm_thinking_since = time.time()
+                self._start_still_thinking_timer(timeout_sec=5.0)
+                
                 llm_start = time.time()
 
                 try:
-                    response = self._generate_response_sync(user_id, text, user_name)
+                    response = self._generate_response_sync(user_id, text, user_name, skip_history_add=skip_history_add)
                     llm_time = time.time() - llm_start
+                    
+                    # Cancel "still thinking" timer - we got the response
+                    self._cancel_still_thinking_timer()
 
                     # Record LLM stats
                     self._record_llm_stat(llm_time * 1000)
@@ -2559,6 +2618,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                     self._queue_tts(response, self.voice_prompt, pipeline_start, user_id, tracker, turn_id)
 
                 except Exception as e:
+                    self._cancel_still_thinking_timer()
                     logger.error(f"LLM error: {e}", exc_info=True)
 
     def _queue_tts(self, text: str, voice_prompt: dict, pipeline_start: float, user_id: int, tracker=None, turn_id: int = None):
@@ -2889,6 +2949,125 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         # Also record to rolling tracker
         if self._rolling_latency:
             self._rolling_latency.record("tts", duration_ms)
+
+    # =========================================================================
+    # Conversational Fillers (thinking, interruption acknowledgment)
+    # =========================================================================
+
+    def _get_filler(self, filler_type: str) -> str | None:
+        """Get a random filler phrase from soul config.
+        
+        Args:
+            filler_type: One of 'thinking', 'still_thinking', 'interrupted'
+            
+        Returns:
+            Random filler phrase, or None if unavailable.
+        """
+        import random
+        
+        if not self.soul_config or not self.soul_config.fallbacks:
+            return None
+            
+        fillers = getattr(self.soul_config.fallbacks, filler_type, None)
+        if not fillers:
+            return None
+            
+        return random.choice(fillers)
+
+    def _is_question(self, text: str) -> bool:
+        """Detect if text is likely a question (simple heuristics).
+        
+        Args:
+            text: The user's utterance.
+            
+        Returns:
+            True if likely a question.
+        """
+        text = text.strip().lower()
+        
+        # Ends with question mark
+        if text.endswith('?'):
+            return True
+            
+        # Starts with question words
+        question_starters = (
+            'who', 'what', 'when', 'where', 'why', 'how',
+            'is', 'are', 'was', 'were', 'will', 'would', 'could', 'should',
+            'can', 'do', 'does', 'did', 'have', 'has', 'had',
+        )
+        first_word = text.split()[0] if text.split() else ''
+        if first_word in question_starters:
+            return True
+            
+        return False
+
+    def _speak_filler(self, filler_type: str):
+        """Speak a filler phrase immediately (bypasses queue).
+        
+        Args:
+            filler_type: One of 'thinking', 'still_thinking', 'interrupted'
+        """
+        filler = self._get_filler(filler_type)
+        if not filler:
+            return
+            
+        self.logger.debug(f"Speaking filler ({filler_type}): {filler}")
+        
+        # Speak synchronously - this is quick and should complete fast
+        try:
+            self._speak_sync(filler, self.voice_prompt, None, None)
+        except Exception as e:
+            self.logger.warning(f"Failed to speak filler: {e}")
+
+    def _on_barge_in(self):
+        """Called when user interrupts the bot (barge-in callback).
+        
+        Speaks a brief acknowledgment like "Oh, sorry" and stops speaking.
+        """
+        self.logger.info("Barge-in detected - speaking interruption acknowledgment")
+        
+        # Cancel any "still thinking" timer
+        if self._still_thinking_timer:
+            self._still_thinking_timer.cancel()
+            self._still_thinking_timer = None
+        
+        # Get interruption acknowledgment filler
+        filler = self._get_filler('interrupted')
+        if filler:
+            # We can't speak it now (we're being interrupted), but we could queue it
+            # Actually, on second thought - if we're interrupted, we should just stop.
+            # The filler would be weird to say after being cut off.
+            # Let's just log it for now. The interruption itself is the acknowledgment.
+            self.logger.debug(f"Would say: {filler} (but we're interrupted)")
+        
+        # Clear the speaking flag (handled by turn controller)
+
+    def _start_still_thinking_timer(self, timeout_sec: float = 5.0):
+        """Start a timer to speak 'still thinking' if LLM is slow.
+        
+        Args:
+            timeout_sec: Seconds before triggering the filler.
+        """
+        # Cancel any existing timer
+        if self._still_thinking_timer:
+            self._still_thinking_timer.cancel()
+        
+        def _on_still_thinking():
+            # Only fire if we're still waiting for LLM
+            if self._llm_thinking_since is not None:
+                self.logger.info("LLM taking long - speaking 'still thinking' filler")
+                self._speak_filler('still_thinking')
+        
+        self._still_thinking_timer = threading.Timer(timeout_sec, _on_still_thinking)
+        self._still_thinking_timer.daemon = True
+        self._still_thinking_timer.start()
+
+    def _cancel_still_thinking_timer(self):
+        """Cancel the 'still thinking' timer."""
+        if self._still_thinking_timer:
+            self._still_thinking_timer.cancel()
+            self._still_thinking_timer = None
+        self._llm_thinking_since = None
 
     def speak(self, text: str, blocking: bool = False):
         """Queue text to be spoken."""
