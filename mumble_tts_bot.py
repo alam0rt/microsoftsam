@@ -2254,11 +2254,26 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             # Randomize delay so bots don't respond in lockstep
             delay = 0.3 + random.random() * 0.7  # 0.3-1.0 seconds
             time_module.sleep(delay)
-            # Check if any bot is speaking (not just us) - yield if so
-            if self._shared_services and self._shared_services.any_bot_speaking():
-                return
-            if not self._speaking.is_set():  # Still not speaking
+            
+            # Retry loop: wait for other bots to finish speaking
+            max_wait = 15.0  # Don't wait forever
+            waited = 0.0
+            while waited < max_wait:
+                # Check if any bot is speaking (not just us) - wait if so
+                if self._shared_services and self._shared_services.any_bot_speaking():
+                    time_module.sleep(0.5)
+                    waited += 0.5
+                    continue
+                if self._speaking.is_set():
+                    time_module.sleep(0.5)
+                    waited += 0.5
+                    continue
+                # Nobody speaking - try to respond
                 self._maybe_respond(user_id, speaker_name, force=True)
+                return
+            
+            # Timed out waiting - give up on this utterance
+            self.logger.debug(f"Gave up waiting to respond to {speaker_name}")
 
         threading.Thread(target=delayed_respond, daemon=True).start()
 
