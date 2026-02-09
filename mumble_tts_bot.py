@@ -212,7 +212,7 @@ def split_into_sentences(text: str, max_chars: int = 120) -> List[str]:
     return [c.strip() for c in chunks if c.strip()]
 
 
-def _pad_tts_text(text: str, min_chars: int = 20, min_words: int = 4) -> str:
+def _pad_tts_text(text: str, min_chars: int = 20) -> str:
     """Pad text to avoid very short TTS inputs that can crash the vocoder.
 
     Uses ellipses as padding - these generate natural pauses without producing
@@ -688,8 +688,6 @@ class SharedBotServices:
                 {"role": "assistant", "content": "Greetings!"},
             ]
         """
-        now = time.time()
-        
         with self._journal_lock:
             events = list(self._event_journal)
         
@@ -1933,7 +1931,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         if len(history) > self.channel_history_max:
             self.channel_history = history[-self.channel_history_max:]
 
-    def _build_llm_messages(self, current_speaker: str = None) -> list[dict]:
+    def _build_llm_messages(self) -> list[dict]:
         """Build LLM message list from the shared event journal.
 
         Creates a natural conversation flow where the LLM can see
@@ -1973,7 +1971,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         """
         return self._build_llm_messages()
 
-    def _add_to_history(self, user_id: int, role: str, content: str, user_name: str = None, include_time: bool = False):
+    def _add_to_history(self, user_id: int, role: str, content: str, user_name: str = None):
         """Add a message to conversation history via the shared journal.
 
         This is the single entry point for adding messages to context.
@@ -2395,15 +2393,29 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
     def _on_bot_utterance(self, speaker_name: str, text: str) -> None:
         """Handle an utterance broadcast from another bot.
 
-        This is "fake ASR" - we receive the text directly instead of
-        transcribing audio. Treats other bots like any other user.
+        The utterance is already logged to the shared journal by the speaking
+        bot via broadcast_utterance(), so we have context awareness.
+        
+        Whether we RESPOND depends on the soul's talks_to_bots setting.
+        Default is False to prevent infinite bot-to-bot loops.
 
         Args:
-            speaker_name: Name of the bot that spoke (treated as user name).
+            speaker_name: Name of the bot that spoke.
             text: What they said.
         """
-        # Don't respond to our own utterances
+        # Don't process our own utterances
         if speaker_name == self.user:
+            return
+
+        self.logger.info(f'Heard (from {speaker_name}): "{text[:50]}..."' if len(text) > 50 else f'Heard (from {speaker_name}): "{text}"')
+
+        # Check if this bot is configured to talk to other bots
+        talks_to_bots = False
+        if self.soul_config and hasattr(self.soul_config, 'talks_to_bots'):
+            talks_to_bots = self.soul_config.talks_to_bots
+        
+        if not talks_to_bots:
+            # Just observe for context, don't respond
             return
 
         # Don't respond if we're currently speaking
@@ -2413,30 +2425,23 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         # Create a fake user_id based on speaker name (negative to avoid collision)
         user_id = -hash(speaker_name) % 1000000
 
-        self.logger.info(f'Heard (from {speaker_name}): "{text[:50]}..."' if len(text) > 50 else f'Heard (from {speaker_name}): "{text}"')
-
-        # NOTE: Don't add to history here - _generate_response will add it
-        # Adding here would cause duplicates in the LLM context
-
         # Store as pending text and maybe respond
         current_time = time.time()
         self.pending_text[user_id] = text
         self.pending_text_time[user_id] = current_time
 
         # Try to respond (with a small delay to let turn-taking work)
-        # Use a thread to avoid blocking the broadcast
         def delayed_respond():
             import random
             import time as time_module
             # Randomize delay so bots don't respond in lockstep
-            delay = 0.3 + random.random() * 0.7  # 0.3-1.0 seconds
+            delay = 0.5 + random.random() * 1.5  # 0.5-2.0 seconds
             time_module.sleep(delay)
             
             # Retry loop: wait for other bots to finish speaking
-            max_wait = 15.0  # Don't wait forever
+            max_wait = 15.0
             waited = 0.0
             while waited < max_wait:
-                # Check if any bot is speaking (not just us) - wait if so
                 if self._shared_services.any_bot_speaking():
                     time_module.sleep(0.5)
                     waited += 0.5
@@ -2449,7 +2454,6 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 self._maybe_respond(user_id, speaker_name, force=True)
                 return
             
-            # Timed out waiting - give up on this utterance
             self.logger.debug(f"Gave up waiting to respond to {speaker_name}")
 
         threading.Thread(target=delayed_respond, daemon=True).start()

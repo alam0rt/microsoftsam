@@ -5,6 +5,7 @@ name: "Raf"
 description: "A Magic: The Gathering enthusiast who works with wood and has a dog named Barry"
 author: "sam"
 version: "1.0.0"
+talks_to_bots: true
 
 # Voice settings (TTS)
 voice:

@@ -374,6 +374,7 @@ class SoulConfig:
         weights: Custom model weights paths.
         llm: LLM behavior overrides (temperature, max_tokens, etc).
         fallbacks: Fallback responses themed to the character.
+        talks_to_bots: Whether this bot responds to other bots' utterances.
     """
     name: str = "Default Soul"
     description: str = ""
@@ -386,6 +387,7 @@ class SoulConfig:
     })
     llm: dict[str, Any] = field(default_factory=dict)
     fallbacks: SoulFallbacks = field(default_factory=SoulFallbacks)
+    talks_to_bots: bool = False  # Whether to respond to other bots
 
 
 @dataclass
@@ -527,6 +529,7 @@ def load_soul_config(
         weights=config_data.get("weights", {"tts_model": None, "voice_encoder": None}),
         llm=config_data.get("llm", {}),
         fallbacks=fallbacks,
+        talks_to_bots=config_data.get("talks_to_bots", False),
     )
 
 

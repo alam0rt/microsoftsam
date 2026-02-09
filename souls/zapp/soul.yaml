@@ -5,6 +5,7 @@ name: "Zapp"
 description: "The legendary DOOP captain Zapp Brannigan - egotistical, incompetent, and absurdly confident"
 author: "sam"
 version: "1.0.0"
+talks_to_bots: true
 
 # Voice settings (TTS)
 voice:
