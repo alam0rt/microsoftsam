@@ -261,8 +261,8 @@ class TestEventJournal:
 
     def test_log_event_basic(self):
         """Test logging a basic event."""
+
         from mumble_tts_bot import SharedBotServices
-        import time
 
         services = SharedBotServices()
         services.log_event("user_message", "sam", "hello world")
@@ -288,7 +288,7 @@ class TestEventJournal:
 
         journal = services.get_journal_for_llm()
         assert len(journal) == 5
-        
+
         events = [e["event"] for e in journal]
         assert events == ["user_message", "bot_message", "user_joined", "user_left", "text_message"]
 
@@ -315,7 +315,7 @@ class TestEventJournal:
         services.log_event("bot_message", "Zapp", "I am magnificent!")
 
         messages = services.get_recent_messages_for_llm()
-        
+
         assert len(messages) == 4
         assert messages[0] == {"role": "user", "content": "sam: hello"}
         assert messages[1] == {"role": "assistant", "content": "Greetings, puny human!"}
@@ -332,7 +332,7 @@ class TestEventJournal:
         services.log_event("bot_message", "Zapp", "Hello both!")
 
         messages = services.get_recent_messages_for_llm()
-        
+
         assert len(messages) == 3
         assert messages[0] == {"role": "user", "content": "sam: voice hello"}
         assert messages[1] == {"role": "user", "content": "bob (text): text hello"}
@@ -349,7 +349,7 @@ class TestEventJournal:
 
         messages = services.get_recent_messages_for_llm()
         assert len(messages) == 1  # Only the user_message
-        
+
         journal = services.get_journal_for_llm()
         assert len(journal) == 3  # All events in full journal
 
@@ -368,8 +368,9 @@ class TestEventJournal:
 
     def test_journal_seconds_ago(self):
         """Test seconds_ago is calculated correctly."""
-        from mumble_tts_bot import SharedBotServices
         import time
+
+        from mumble_tts_bot import SharedBotServices
 
         services = SharedBotServices()
         services.log_event("user_message", "sam", "first")
@@ -386,14 +387,15 @@ class TestEventJournal:
         from mumble_tts_bot import SharedBotServices
 
         services = SharedBotServices()
-        
+
         assert services.get_journal_for_llm() == []
         assert services.get_recent_messages_for_llm() == []
 
     def test_journal_thread_safety(self):
         """Test journal is thread-safe."""
-        from mumble_tts_bot import SharedBotServices
         import threading
+
+        from mumble_tts_bot import SharedBotServices
 
         services = SharedBotServices()
         errors = []
@@ -434,8 +436,9 @@ class TestBotUtteranceHandling:
     @pytest.fixture
     def mock_bot(self):
         """Create a mock bot with minimal required attributes."""
-        from unittest.mock import MagicMock, AsyncMock
         import threading
+        from unittest.mock import MagicMock
+
         from mumble_tts_bot import SharedBotServices
 
         bot = MagicMock()
@@ -502,8 +505,8 @@ class TestBotUtteranceHandling:
 
     def test_no_response_without_talks_to_bots(self, mock_bot, soul_config_no_talk):
         """Test that bot does not respond when talks_to_bots is False."""
+
         from mumble_tts_bot import MumbleVoiceBot
-        import time
 
         mock_bot.soul_config = soul_config_no_talk
         mock_bot.user = "Raf"
@@ -512,7 +515,7 @@ class TestBotUtteranceHandling:
 
         # Should log that we heard it
         mock_bot.logger.info.assert_called()
-        
+
         # Should NOT add to pending_text (no response queued)
         assert len(mock_bot.pending_text) == 0
 
@@ -530,8 +533,8 @@ class TestBotUtteranceHandling:
 
     def test_queues_response_with_talks_to_bots(self, mock_bot, soul_config_talks_to_bots):
         """Test that bot queues response when talks_to_bots is True."""
+
         from mumble_tts_bot import MumbleVoiceBot
-        import time
 
         mock_bot.soul_config = soul_config_talks_to_bots
         mock_bot.user = "Raf"
@@ -616,7 +619,7 @@ class TestSoulConfigTalksToBots:
 
         soul_dir = tmp_path / "souls" / "test_soul"
         soul_dir.mkdir(parents=True)
-        
+
         soul_yaml = """
 name: "Test Soul"
 description: "A test soul"
@@ -632,7 +635,7 @@ description: "A test soul"
 
         soul_dir = tmp_path / "souls" / "chatty_soul"
         soul_dir.mkdir(parents=True)
-        
+
         soul_yaml = """
 name: "Chatty Soul"
 description: "A soul that talks to other bots"
@@ -649,7 +652,7 @@ talks_to_bots: true
 
         soul_dir = tmp_path / "souls" / "quiet_soul"
         soul_dir.mkdir(parents=True)
-        
+
         soul_yaml = """
 name: "Quiet Soul"
 description: "A soul that does not talk to other bots"
@@ -723,7 +726,7 @@ class TestBroadcastUtterance:
 
         services.register_utterance_listener(bad_listener)
         services.register_utterance_listener(good_listener)
-        
+
         # Should not raise, and good listener should still receive
         services.broadcast_utterance("Zapp", "For glory!")
 
@@ -740,7 +743,7 @@ class TestBroadcastUtterance:
 
         # Without bot_name, all bot messages are "assistant"
         messages = services.get_recent_messages_for_llm()
-        
+
         assert len(messages) == 3
         assert messages[0] == {"role": "user", "content": "sam: Hello bots!"}
         assert messages[1] == {"role": "assistant", "content": "Hey sam!"}
@@ -758,7 +761,7 @@ class TestBroadcastUtterance:
         # From Raf's perspective: only Raf's messages are "assistant"
         # Zapp's messages should be "user" with name prefix
         messages_raf = services.get_recent_messages_for_llm(bot_name="Raf")
-        
+
         assert len(messages_raf) == 3
         assert messages_raf[0] == {"role": "user", "content": "sam: Hello bots!"}
         assert messages_raf[1] == {"role": "assistant", "content": "Hey sam!"}  # Raf's own message
@@ -766,7 +769,7 @@ class TestBroadcastUtterance:
 
         # From Zapp's perspective: only Zapp's messages are "assistant"
         messages_zapp = services.get_recent_messages_for_llm(bot_name="Zapp")
-        
+
         assert len(messages_zapp) == 3
         assert messages_zapp[0] == {"role": "user", "content": "sam: Hello bots!"}
         assert messages_zapp[1] == {"role": "user", "content": "Raf: Hey sam!"}  # Raf is another user

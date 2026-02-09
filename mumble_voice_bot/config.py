@@ -381,10 +381,10 @@ class SoulFallbacks:
 @dataclass
 class SoulEvents:
     """Event-triggered responses that bypass the LLM.
-    
+
     These are spoken directly via TTS when specific events occur.
     Use {user} placeholder for the username. Use null/empty to disable.
-    
+
     Attributes:
         user_first_speech: When a user speaks for the first time this session.
         user_joined: When a user joins the channel (if you want TTS, not just log).

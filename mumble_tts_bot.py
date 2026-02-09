@@ -144,8 +144,9 @@ except ImportError as e:
 
 # Import tool system
 try:
-    from mumble_voice_bot.tools import ToolRegistry
     from mumble_voice_bot.tools.souls import SoulsTool
+
+    from mumble_voice_bot.tools import ToolRegistry
     from mumble_voice_bot.tools.sound_effects import SoundEffectsTool
     from mumble_voice_bot.tools.web_search import WebSearchTool
     TOOLS_AVAILABLE = True
@@ -526,7 +527,7 @@ class SharedBotServices:
         # Counter for how many bots are currently speaking (for barge-in suppression)
         self._speaking_count = 0
         self._speaking_lock = threading.Lock()
-        
+
         # Event journal - shared timeline of events for LLM context
         # Each entry: {"time": float, "event": str, "speaker": str, "text": str}
         self._event_journal: list[dict] = []
@@ -534,7 +535,7 @@ class SharedBotServices:
         self._journal_max_entries = 50  # Keep last 50 events
         self._journal_max_age = 300.0  # 5 minutes
         self._start_time = time.time()  # Reference time for relative timestamps
-        
+
         # Response claim tracking - prevents multiple responders to same utterance
         # Maps (user_id, text_hash) -> timestamp when claimed
         # This is like "someone already started responding to this" - no bot identity tracked
@@ -609,7 +610,7 @@ class SharedBotServices:
         Args:
             event_type: Type of event:
                 - "user_message": A user (human) said something
-                - "bot_message": A bot said something  
+                - "bot_message": A bot said something
                 - "user_joined": User joined the channel
                 - "user_left": User left the channel
                 - "bot_joined": Bot connected to channel
@@ -617,14 +618,14 @@ class SharedBotServices:
             content: The message content (for message events)
         """
         now = time.time()
-        
+
         entry = {
             "event": event_type,
             "speaker": speaker,
             "content": content,
             "time": now,
         }
-        
+
         with self._journal_lock:
             self._event_journal.append(entry)
             # Prune old entries
@@ -636,7 +637,7 @@ class SharedBotServices:
 
     def get_journal_for_llm(self, max_events: int = 30) -> list[dict]:
         """Get the journal formatted for LLM context.
-        
+
         Returns a list of event dicts with seconds_ago instead of absolute time.
         This is the primary way bots get conversation context.
 
@@ -652,16 +653,16 @@ class SharedBotServices:
             ]
         """
         now = time.time()
-        
+
         with self._journal_lock:
             events = list(self._event_journal)
-        
+
         if not events:
             return []
-        
+
         # Take most recent events
         events = events[-max_events:]
-        
+
         # Convert to LLM-friendly format with seconds_ago
         result = []
         for e in events:
@@ -673,15 +674,15 @@ class SharedBotServices:
             if e.get("content"):
                 entry["content"] = e["content"]
             result.append(entry)
-        
+
         return result
 
     def get_recent_messages_for_llm(self, max_messages: int = 20, bot_name: str = None) -> list[dict]:
         """Get recent messages formatted as OpenAI-style messages.
-        
+
         Filters journal to just message events and formats them for the
         LLM messages array (role: user/assistant, content: ...).
-        
+
         IMPORTANT: In multi-bot mode, only the requesting bot's own messages
         should be role="assistant". Other bots' messages are role="user" with
         their name prefixed, just like human users.
@@ -702,14 +703,14 @@ class SharedBotServices:
         """
         with self._journal_lock:
             events = list(self._event_journal)
-        
+
         # Filter to just message events and format for LLM
         messages = []
         for e in events:
             event_type = e["event"]
             speaker = e.get('speaker', 'Unknown')
             content = e.get('content', '')
-            
+
             if event_type == "user_message":
                 # Voice message from a user
                 messages.append({
@@ -740,14 +741,14 @@ class SharedBotServices:
                         "content": content,
                         "time": e["time"],
                     })
-        
+
         # Take most recent
         messages = messages[-max_messages:]
-        
+
         # Remove time field (just used for ordering)
         for m in messages:
             del m["time"]
-        
+
         return messages
 
     # =========================================================================
@@ -769,7 +770,7 @@ class SharedBotServices:
         # Log to event journal as bot_message
         self.log_event("bot_message", speaker_name, text)
         logger.info(f"[BROADCAST] {speaker_name} speaking: '{text[:50]}...'" if len(text) > 50 else f"[BROADCAST] {speaker_name} speaking: '{text}'")
-        
+
         if not hasattr(self, '_utterance_listeners'):
             self._utterance_listeners = []
         listener_count = len(self._utterance_listeners)
@@ -1031,7 +1032,7 @@ class MumbleVoiceBot:
 
         # Multi-bot coordination (shared echo filter so all bots know what all bots said)
         self._shared_echo_filter = shared_echo_filter
-        
+
         # SharedBotServices handles the event journal and coordination
         # Always use it - even for single-bot mode (creates one if not provided)
         if shared_services is not None:
@@ -1977,20 +1978,20 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
         # Get full journal with all events (not just messages)
         journal = self._shared_services.get_journal_for_llm(max_events=50)
-        
+
         # Build a rich context block that tells the LLM what's happening
         context_parts = []
-        
+
         # Time context
         time_ctx = self._get_time_context()
         if time_ctx:
             context_parts.append(f"Current time: {time_ctx}")
-        
+
         # Channel context (who's present)
         channel_ctx = self._get_channel_context()
         if channel_ctx:
             context_parts.append(f"Channel: {channel_ctx}")
-        
+
         # Recent events summary (joins/leaves/interruptions in last 60s)
         recent_events = []
         for e in journal:
@@ -1998,7 +1999,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 continue
             event_type = e.get("event", "")
             speaker = e.get("speaker", "someone")
-            
+
             if event_type == "user_joined":
                 recent_events.append(f"{speaker} just joined")
             elif event_type == "user_left":
@@ -2008,10 +2009,10 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             elif event_type == "started_speaking":
                 # Could note who started speaking
                 pass
-        
+
         if recent_events:
             context_parts.append(f"Recent: {', '.join(recent_events[-3:])}")  # Last 3 events
-        
+
         if context_parts:
             messages.append({
                 "role": "system",
@@ -2054,7 +2055,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         3. If LLM returns tool calls, execute them
         4. Send tool results back to LLM
         5. Repeat until LLM returns a text response (max 5 iterations)
-        
+
         Args:
             user_id: User session ID
             text: The message text to respond to
@@ -2173,7 +2174,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
     def _run_coro_sync(self, coroutine):
         """Run an async coroutine from sync code safely.
-        
+
         This handles the case where we're called from:
         1. The main thread (no running loop) - use asyncio.run()
         2. A different thread (event loop running) - use run_coroutine_threadsafe()
@@ -2193,7 +2194,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 # Different thread, use run_coroutine_threadsafe
                 future = asyncio.run_coroutine_threadsafe(coroutine, self._event_loop)
                 return future.result(timeout=35.0)
-        
+
         # No event loop or not running - just run directly
         try:
             loop = asyncio.get_event_loop()
@@ -2463,7 +2464,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
         The utterance is already logged to the shared journal by the speaking
         bot via broadcast_utterance(), so we have context awareness.
-        
+
         Whether we RESPOND depends on the soul's talks_to_bots setting.
         Default is False to prevent infinite bot-to-bot loops.
 
@@ -2474,7 +2475,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         # Don't process our own utterances
         if speaker_name == self.user:
             return
-        
+
         # Ignore very short utterances (likely fillers that shouldn't trigger responses)
         # Strip dots/ellipsis since TTS pads text with periods
         clean_text = text.strip().rstrip('.')
@@ -2489,12 +2490,12 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         talks_to_bots = False
         if self.soul_config and hasattr(self.soul_config, 'talks_to_bots'):
             talks_to_bots = self.soul_config.talks_to_bots
-        
+
         if not talks_to_bots:
             # Just observe for context, don't respond
             self.logger.info(f"[BOT-HEARD] {self.user} NOT responding (talks_to_bots=False)")
             return
-        
+
         self.logger.info(f"[BOT-HEARD] {self.user} WILL respond (talks_to_bots=True)")
 
         # Don't respond if we're currently speaking
@@ -2507,10 +2508,10 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
         # === Same logic as user speech (post-ASR) ===
         # We have perfect text from broadcast, no ASR needed
-        
+
         # Echo filter not needed - bots don't echo each other's speech via audio
         # Utterance classifier not needed - bot speech is already filtered at source
-        
+
         # Store pending text exactly like user speech
         current_time = time.time()
         if user_id in self.pending_text:
@@ -2525,10 +2526,10 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
     def _get_session_id_by_name(self, name: str) -> int:
         """Look up a user's Mumble session ID by their name.
-        
+
         Args:
             name: The user/bot name to look up.
-            
+
         Returns:
             Session ID if found, or a consistent positive hash if not found.
         """
@@ -2541,7 +2542,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
     def _maybe_respond(self, user_id: int, user_name: str, force: bool = False, tracker: 'LatencyTracker' = None):
         """Respond if we have pending text and enough time has passed.
-        
+
         Args:
             user_id: ID of the user/bot speaking.
             user_name: Name of the speaker.
@@ -2599,7 +2600,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                     return
 
                 self.logger.info(f'Generating response for {user_name}: "{text}"')
-                
+
                 # Check for first-time speaker event
                 if user_name and self._check_first_time_speaker(user_name):
                     # Trigger first speech event - this speaks a greeting
@@ -2607,23 +2608,23 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                         # If we spoke a greeting, add a small pause before continuing
                         import time as time_module
                         time_module.sleep(0.3)
-                
+
                 # Speak a thinking filler if this looks like a question
                 # This fills the gap while LLM processes and feels more natural
                 if self._is_question(text):
                     self.logger.debug("Detected question - speaking thinking filler")
                     self._trigger_event('thinking', user_name) or self._speak_filler('thinking')
-                
+
                 # Start "still thinking" timer in case LLM is slow
                 self._llm_thinking_since = time.time()
                 self._start_still_thinking_timer(timeout_sec=5.0)
-                
+
                 llm_start = time.time()
 
                 try:
                     response = self._generate_response_sync(user_id, text, user_name)
                     llm_time = time.time() - llm_start
-                    
+
                     # Cancel "still thinking" timer - we got the response
                     self._cancel_still_thinking_timer()
 
@@ -2772,7 +2773,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
     def _speak_sync(self, text: str, voice_prompt: dict, pipeline_start: float = None, tracker: 'LatencyTracker' = None, skip_broadcast: bool = False):
         """Generate and play speech.
-        
+
         Args:
             text: Text to speak.
             voice_prompt: Voice prompt for TTS.
@@ -3010,53 +3011,53 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
     def _get_filler(self, filler_type: str) -> str | None:
         """Get a random filler phrase from soul config.
-        
+
         Checks events first, then falls back to fallbacks for compatibility.
-        
+
         Args:
             filler_type: One of 'thinking', 'still_thinking', 'interrupted'
-            
+
         Returns:
             Random filler phrase, or None if unavailable.
         """
         import random
-        
+
         fillers = None
-        
+
         # First try events config
         if self.soul_config and self.soul_config.events:
             fillers = getattr(self.soul_config.events, filler_type, None)
-        
+
         # Fall back to fallbacks
         if not fillers and self.soul_config and self.soul_config.fallbacks:
             fillers = getattr(self.soul_config.fallbacks, filler_type, None)
-        
+
         if not fillers:
             return None
-            
+
         return random.choice(fillers)
 
     def _get_event_response(self, event_type: str, user: str = None) -> str | None:
         """Get a random event-triggered response from soul config.
-        
+
         First checks soul_config.events, then falls back to soul_config.fallbacks
         for compatible event types.
-        
+
         Args:
             event_type: Event name (e.g., 'user_first_speech', 'interrupted', 'thinking')
             user: Username for {user} placeholder substitution.
-            
+
         Returns:
             Response string with placeholders filled, or None if disabled/unavailable.
         """
         import random
-        
+
         responses = None
-        
+
         # First try events config
         if self.soul_config and self.soul_config.events:
             responses = getattr(self.soul_config.events, event_type, None)
-        
+
         # Fall back to fallbacks for compatible types
         if not responses and self.soul_config and self.soul_config.fallbacks:
             # Map event types to fallback types
@@ -3071,25 +3072,25 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             fallback_key = fallback_map.get(event_type)
             if fallback_key:
                 responses = getattr(self.soul_config.fallbacks, fallback_key, None)
-        
+
         if not responses:
             return None
-            
+
         response = random.choice(responses)
-        
+
         # Fill in placeholders
         if user:
             response = response.replace("{user}", user)
-        
+
         return response
 
     def _trigger_event(self, event_type: str, user: str = None) -> bool:
         """Trigger an event and speak the response if configured.
-        
+
         Args:
             event_type: Event name (e.g., 'user_first_speech', 'interrupted')
             user: Username for placeholder substitution.
-            
+
         Returns:
             True if event was handled (response spoken), False otherwise.
         """
@@ -3097,9 +3098,9 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         if not response:
             self.logger.debug(f"[EVENT] {event_type} - no response configured")
             return False
-        
+
         self.logger.info(f"[EVENT] {event_type} for {user or 'unknown'} - speaking: '{response}'")
-        
+
         # Speak directly via TTS (bypasses LLM)
         # skip_broadcast=True because events are quick utterances (greetings, fillers)
         # that shouldn't trigger other bots to respond
@@ -3112,35 +3113,35 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
     def _check_first_time_speaker(self, user_name: str) -> bool:
         """Check if this is the first time we've heard from this user.
-        
+
         Args:
             user_name: The user's name.
-            
+
         Returns:
             True if this is their first speech this session.
         """
         if user_name in self._greeted_users:
             return False
-        
+
         self._greeted_users.add(user_name)
         self.logger.info(f"[EVENT] First speech detected from: {user_name}")
         return True
 
     def _is_question(self, text: str) -> bool:
         """Detect if text is likely a question (simple heuristics).
-        
+
         Args:
             text: The user's utterance.
-            
+
         Returns:
             True if likely a question.
         """
         text = text.strip().lower()
-        
+
         # Ends with question mark
         if text.endswith('?'):
             return True
-            
+
         # Starts with question words
         question_starters = (
             'who', 'what', 'when', 'where', 'why', 'how',
@@ -3150,12 +3151,12 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         first_word = text.split()[0] if text.split() else ''
         if first_word in question_starters:
             return True
-            
+
         return False
 
     def _speak_filler(self, filler_type: str):
         """Speak a filler phrase immediately (bypasses queue).
-        
+
         Args:
             filler_type: One of 'thinking', 'still_thinking', 'interrupted'
         """
@@ -3163,9 +3164,9 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         if not filler:
             self.logger.info(f"[FILLER] No filler available for type: {filler_type}")
             return
-            
+
         self.logger.info(f"[FILLER] Speaking ({filler_type}): '{filler}'")
-        
+
         # Speak synchronously with skip_broadcast=True so other bots don't
         # try to respond to "Hmm..." or "Let me think..."
         try:
@@ -3175,43 +3176,43 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
     def _on_barge_in(self):
         """Called when user interrupts the bot (barge-in callback).
-        
+
         Speaks a brief acknowledgment like "Oh, sorry" and stops speaking.
         """
         self.logger.info("[BARGE-IN] User interrupted bot - stopping speech")
-        
+
         # Cancel any "still thinking" timer
         if self._still_thinking_timer:
             self._still_thinking_timer.cancel()
             self._still_thinking_timer = None
-        
+
         # Try to get an interruption response from events config
         response = self._get_event_response('interrupted')
         if response:
             # We could speak a quick acknowledgment after we stop
             # But speaking while being interrupted is weird - log for now
             self.logger.info(f"[BARGE-IN] Would have said: '{response}' (suppressed - being interrupted)")
-        
+
         # Clear the speaking flag (handled by turn controller)
 
     def _start_still_thinking_timer(self, timeout_sec: float = 5.0):
         """Start a timer to speak 'still thinking' if LLM is slow.
-        
+
         Args:
             timeout_sec: Seconds before triggering the filler.
         """
         # Cancel any existing timer
         if self._still_thinking_timer:
             self._still_thinking_timer.cancel()
-        
+
         self.logger.debug(f"[TIMER] Starting 'still thinking' timer ({timeout_sec}s)")
-        
+
         def _on_still_thinking():
             # Only fire if we're still waiting for LLM
             if self._llm_thinking_since is not None:
                 self.logger.info("[TIMER] LLM taking long - speaking 'still thinking' filler")
                 self._speak_filler('still_thinking')
-        
+
         self._still_thinking_timer = threading.Timer(timeout_sec, _on_still_thinking)
         self._still_thinking_timer.daemon = True
         self._still_thinking_timer.start()

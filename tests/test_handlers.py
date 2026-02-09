@@ -42,7 +42,7 @@ class MockBot:
         # Mock LLM response
         self._generate_oneoff_response_sync = MagicMock(return_value="Hello there!")
         self._generate_response_sync = MagicMock(return_value="Response to your message!")
-        
+
         # Mock shared services (always present now)
         self._shared_services = MagicMock()
         self._shared_services.log_event = MagicMock()

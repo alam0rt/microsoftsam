@@ -9,15 +9,13 @@ Tests the following features:
 - Minimum utterance length filter for bot-to-bot
 """
 
-import pytest
 import threading
 import time
-from unittest.mock import MagicMock, patch, PropertyMock
 
 from mumble_voice_bot.config import (
     SoulConfig,
-    SoulFallbacks,
     SoulEvents,
+    SoulFallbacks,
     load_soul_config,
 )
 
@@ -83,7 +81,7 @@ class TestSoulConfigLoading:
         souls_dir.mkdir()
         soul_dir = souls_dir / "test_soul"
         soul_dir.mkdir()
-        
+
         # Create soul.yaml with events - use DIFFERENT values than defaults
         # to verify they're actually being read from YAML
         # NOTE: Use "responses:" not "on:" because YAML parses "on" as boolean True
@@ -109,25 +107,25 @@ fallbacks:
     - "Hello there!"
 """
         soul_yaml.write_text(yaml_content)
-        
+
         # Create prompt.md
         prompt_md = soul_dir / "prompt.md"
         prompt_md.write_text("You are a test bot.")
-        
+
         # Create audio directory with a reference file
         audio_dir = soul_dir / "audio"
         audio_dir.mkdir()
         # Create a minimal wav file (44 bytes header only is enough for test)
         ref_audio = audio_dir / "reference.wav"
         ref_audio.write_bytes(b'RIFF' + b'\x00' * 40)
-        
+
         # load_soul_config takes (soul_name, souls_dir)
         config = load_soul_config("test_soul", str(souls_dir))
-        
+
         assert config is not None
         assert config.name == "TestBot"
         assert config.talks_to_bots is True
-        
+
         # Check events - should contain our CUSTOM values, not defaults
         assert config.events is not None
         # If parsing works, we should see "CUSTOM" in the values
@@ -135,7 +133,7 @@ fallbacks:
             f"Expected CUSTOM in user_first_speech, got: {config.events.user_first_speech}"
         assert any("CUSTOM" in s for s in config.events.thinking), \
             f"Expected CUSTOM in thinking, got: {config.events.thinking}"
-        
+
         # Check fallbacks
         assert config.fallbacks is not None
         assert config.fallbacks.greetings == ["Hello there!"]
@@ -147,24 +145,24 @@ fallbacks:
         souls_dir.mkdir()
         soul_dir = souls_dir / "minimal_soul"
         soul_dir.mkdir()
-        
+
         soul_yaml = soul_dir / "soul.yaml"
         soul_yaml.write_text("""\
 name: MinimalBot
 """)
-        
+
         prompt_md = soul_dir / "prompt.md"
         prompt_md.write_text("Minimal prompt.")
-        
+
         # Create audio directory with a reference file
         audio_dir = soul_dir / "audio"
         audio_dir.mkdir()
         ref_audio = audio_dir / "reference.wav"
         ref_audio.write_bytes(b'RIFF' + b'\x00' * 40)
-        
+
         # load_soul_config takes (soul_name, souls_dir)
         config = load_soul_config("minimal_soul", str(souls_dir))
-        
+
         assert config is not None
         assert config.name == "MinimalBot"
         # events should have defaults (not None)
@@ -182,14 +180,14 @@ class TestGetEventResponse:
         events = SoulEvents(
             user_first_speech=["Hello {user}!"],
         )
-        
+
         # Simulate the logic
         response = None
         if events.user_first_speech:
             import random
             response = random.choice(events.user_first_speech)
             response = response.replace("{user}", "TestUser")
-        
+
         assert response == "Hello TestUser!"
 
     def test_get_event_response_with_custom_fallbacks(self):
@@ -199,7 +197,7 @@ class TestGetEventResponse:
             user_first_speech=None,  # Disable default
         )
         fallbacks = SoulFallbacks(greetings=["Default greeting!"])
-        
+
         # Simulate fallback logic for user_first_speech -> greetings
         response = None
         if events.user_first_speech:
@@ -208,7 +206,7 @@ class TestGetEventResponse:
         elif fallbacks.greetings:
             import random
             response = random.choice(fallbacks.greetings)
-        
+
         assert response == "Default greeting!"
 
 
@@ -221,13 +219,13 @@ class TestFillerBroadcast:
         # Check the source file directly
         import ast
         from pathlib import Path
-        
+
         bot_file = Path(__file__).parent.parent / "mumble_tts_bot.py"
         source = bot_file.read_text()
-        
+
         # Parse and find the _speak_sync method
         tree = ast.parse(source)
-        
+
         found_skip_broadcast = False
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef) and node.name == '_speak_sync':
@@ -241,13 +239,13 @@ class TestFillerBroadcast:
                     if arg.arg == 'skip_broadcast':
                         found_skip_broadcast = True
                         break
-        
+
         assert found_skip_broadcast, "_speak_sync should have skip_broadcast parameter"
 
     def test_filler_types_exist(self):
         """All expected filler types should be recognized."""
         filler_types = ['thinking', 'still_thinking', 'interrupted']
-        
+
         # These should be valid filler types
         for ftype in filler_types:
             # Just verify they're valid string types
@@ -267,15 +265,15 @@ class TestMinimumUtteranceLengthFilter:
             ("Oh.", 1, True),  # Very short - ignore
             ("Hmm..................", 1, True),  # Padded but still 1 word
         ]
-        
+
         for text, expected_words, should_ignore in test_cases:
             # Simulate the filter logic
             clean_text = text.strip().rstrip('.')
             word_count = len(clean_text.split())
-            
+
             assert word_count == expected_words or abs(word_count - expected_words) <= 1, \
                 f"'{text}' should have ~{expected_words} words, got {word_count}"
-            
+
             is_ignored = word_count < 3
             assert is_ignored == should_ignore, \
                 f"'{text}' should {'be ignored' if should_ignore else 'not be ignored'}"
@@ -287,14 +285,14 @@ class TestStillThinkingTimer:
     def test_timer_creation(self):
         """Timer should be created with correct timeout."""
         timer_fired = threading.Event()
-        
+
         def on_timer():
             timer_fired.set()
-        
+
         timer = threading.Timer(0.1, on_timer)  # 100ms for testing
         timer.daemon = True
         timer.start()
-        
+
         # Wait for timer
         timer_fired.wait(timeout=0.5)
         assert timer_fired.is_set(), "Timer should have fired"
@@ -302,17 +300,17 @@ class TestStillThinkingTimer:
     def test_timer_cancellation(self):
         """Timer should be cancellable before firing."""
         timer_fired = threading.Event()
-        
+
         def on_timer():
             timer_fired.set()
-        
+
         timer = threading.Timer(0.5, on_timer)  # 500ms
         timer.daemon = True
         timer.start()
-        
+
         # Cancel immediately
         timer.cancel()
-        
+
         # Wait and verify it didn't fire
         time.sleep(0.6)
         assert not timer_fired.is_set(), "Cancelled timer should not fire"
@@ -324,54 +322,54 @@ class TestBargeInCallback:
     def test_barge_in_callback_registration(self):
         """TurnController should accept and store barge-in callback."""
         from mumble_voice_bot.turn_controller import TurnController
-        
+
         callback_called = threading.Event()
-        
+
         def on_barge_in():
             callback_called.set()
-        
+
         controller = TurnController()
         controller.on_barge_in(on_barge_in)
-        
+
         # Verify callback is stored
         assert controller._barge_in_callback is not None
 
     def test_barge_in_callback_fires_on_interrupt(self):
         """Callback should fire when barge-in is requested."""
         from mumble_voice_bot.turn_controller import TurnController
-        
+
         callback_called = threading.Event()
-        
+
         def on_barge_in():
             callback_called.set()
-        
+
         controller = TurnController()
         controller.on_barge_in(on_barge_in)
-        
+
         # Simulate: start speaking, then request barge-in
         controller.start_speaking()
         time.sleep(0.3)  # Wait past barge_in_delay_ms
-        
+
         result = controller.request_barge_in()
-        
+
         assert result is True, "Barge-in should succeed when speaking"
         assert callback_called.is_set(), "Callback should have been called"
 
     def test_barge_in_blocked_when_not_speaking(self):
         """Barge-in should fail when not in SPEAKING state."""
         from mumble_voice_bot.turn_controller import TurnController
-        
+
         callback_called = threading.Event()
-        
+
         def on_barge_in():
             callback_called.set()
-        
+
         controller = TurnController()
         controller.on_barge_in(on_barge_in)
-        
+
         # Don't start speaking - should be in IDLE
         result = controller.request_barge_in()
-        
+
         assert result is False, "Barge-in should fail when not speaking"
         assert not callback_called.is_set(), "Callback should not be called"
 
@@ -382,21 +380,21 @@ class TestFirstTimeSpeakerDetection:
     def test_first_time_speaker_set_logic(self):
         """First-time speakers should be tracked in a set."""
         seen_speakers = set()
-        
+
         def check_first_time(user_name: str) -> bool:
             if user_name in seen_speakers:
                 return False
             seen_speakers.add(user_name)
             return True
-        
+
         # First time for each user
         assert check_first_time("alice") is True
         assert check_first_time("bob") is True
-        
+
         # Second time - not first
         assert check_first_time("alice") is False
         assert check_first_time("bob") is False
-        
+
         # New user
         assert check_first_time("charlie") is True
 
@@ -415,7 +413,7 @@ class TestEventTriggerIntegration:
             question_words = ['what', 'who', 'where', 'when', 'why', 'how', 'is', 'are', 'can', 'could', 'would', 'should', 'do', 'does']
             first_word = text.split()[0] if text.split() else ''
             return first_word in question_words
-        
+
         # Test cases
         assert is_question("What is your name?") is True
         assert is_question("How are you?") is True
@@ -428,9 +426,9 @@ class TestEventTriggerIntegration:
         """Event responses should substitute {user} placeholder."""
         response = "Hello {user}! Welcome to the channel."
         user = "sammo"
-        
+
         result = response.replace("{user}", user)
-        
+
         assert result == "Hello sammo! Welcome to the channel."
         assert "{user}" not in result
 
@@ -442,10 +440,10 @@ class TestBotToBotFiltering:
         """Bots should ignore their own utterances."""
         my_name = "Zapp"
         speaker_name = "Zapp"
-        
+
         # Simulate the check
         should_ignore = (speaker_name == my_name)
-        
+
         assert should_ignore is True
 
     def test_other_bot_utterance_processed(self):
@@ -453,20 +451,18 @@ class TestBotToBotFiltering:
         my_name = "Zapp"
         speaker_name = "Raf"
         talks_to_bots = True
-        
+
         # Simulate the check
         should_ignore = (speaker_name == my_name)
         should_respond = not should_ignore and talks_to_bots
-        
+
         assert should_ignore is False
         assert should_respond is True
 
     def test_bot_utterance_ignored_if_not_configured(self):
         """Bots should ignore other bots if talks_to_bots=False."""
-        my_name = "Zapp"
-        speaker_name = "Raf"
         talks_to_bots = False
-        
+
         should_respond = talks_to_bots
-        
+
         assert should_respond is False

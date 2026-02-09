@@ -35,7 +35,7 @@ _debug_start_time = time.monotonic()  # For relative timestamps
 
 def _log_llm_debug(bot_name: str, event: str, data: dict, extra_context: dict = None) -> None:
     """Write debug info to logs/debug.log for LLM request analysis.
-    
+
     Args:
         bot_name: Name of the bot making the request
         event: Event type (REQUEST, RESPONSE, etc.)
@@ -48,7 +48,7 @@ def _log_llm_debug(bot_name: str, event: str, data: dict, extra_context: dict = 
         _debug_log_path.parent.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         mono_time = time.monotonic() - _debug_start_time
-        
+
         with open(_debug_log_path, "a") as f:
             f.write(f"\n{'='*80}\n")
             f.write(f"[{timestamp}] T+{mono_time:.3f}s | BOT: {bot_name} | EVENT: {event}\n")
