@@ -220,6 +220,13 @@ class OpenAIChatLLM(LLMProvider):
         content = message.get("content")
         finish_reason = data["choices"][0].get("finish_reason", "stop")
 
+        # Debug: Log when content is empty but we got other fields
+        if not content:
+            logger.warning(f"LLM returned empty content. Message keys: {list(message.keys())}")
+            # Some models (e.g., gpt-oss) return reasoning but empty content
+            if message.get("reasoning"):
+                logger.warning(f"Model returned reasoning but no content: {message.get('reasoning')[:200]}")
+
         # Parse tool calls - either from structured response or from text
         tool_calls = []
 
@@ -262,6 +269,8 @@ class OpenAIChatLLM(LLMProvider):
             logger.info(f'LLM response ({latency_ms:.0f}ms): {len(tool_calls)} tool call(s): {[tc.name for tc in tool_calls]}')
         elif content:
             logger.info(f'LLM response ({latency_ms:.0f}ms): "{content[:100]}..."' if len(content) > 100 else f'LLM response ({latency_ms:.0f}ms): "{content}"')
+        else:
+            logger.warning(f'LLM response ({latency_ms:.0f}ms): EMPTY (no content, no tool calls). finish_reason={finish_reason}')
 
         if latency_ms > 2000:
             logger.warning(f"LLM slow response: {latency_ms:.0f}ms (>2s)")
