@@ -2583,8 +2583,9 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 # This creates natural pauses between sentences and prevents buffer overflow
                 # LuxTTS outputs 48kHz audio
                 chunk_duration_sec = chunk_samples / 48000
-                # Wait for 80% of audio duration to create natural pacing
-                wait_time = chunk_duration_sec * 0.8
+                # Wait for 90% of audio duration to create natural pacing
+                # Plus a small fixed delay for sentence pauses
+                wait_time = chunk_duration_sec * 0.9 + 0.15  # Extra 150ms between chunks
                 if wait_time > 0.1:
                     time.sleep(wait_time)
 
