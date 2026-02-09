@@ -351,70 +351,100 @@ class ParrotBot:
             traceback.print_exc()
             return
         
-        # Generate speech
-        self.logger.debug("Generating speech...")
-        try:
-            # Use generate_speech for the shared TTS (StreamingLuxTTS from mumble_tts_bot)
-            audio = self.tts.generate_speech(
-                text, voice_prompt, num_steps=4, speed=1.0
-            )
-            # Convert to 16-bit PCM at 48kHz (same as mumble_tts_bot)
-            # Must call .cpu() before .numpy() for CUDA tensors
-            if hasattr(audio, 'cpu'):
-                audio_np = audio.cpu().numpy().squeeze()
-            elif hasattr(audio, 'numpy'):
-                audio_np = audio.numpy().squeeze()
-            else:
-                audio_np = np.array(audio).squeeze()
-            # Clip to valid range and convert to 16-bit PCM
-            audio_np = np.clip(audio_np, -1.0, 1.0)
-            audio_pcm = (audio_np * 32767).astype(np.int16).tobytes()
-            self.logger.debug(f"Generated {len(audio_pcm)} bytes of audio")
-        except Exception as e:
-            self.logger.error(f"TTS error: {e}")
-            traceback.print_exc()
-            return
-        
-        # Queue for playback
-        self._tts_queue.put((user_name, text, audio_pcm))
+        # Queue TTS job (voice cloning done, now queue text for streaming synthesis)
+        self._tts_queue.put((user_name, text, voice_prompt))
 
     def _tts_worker(self):
-        """Background thread for TTS playback."""
+        """Background thread for streaming TTS playback."""
         while not self._shutdown.is_set():
             try:
                 item = self._tts_queue.get(timeout=0.5)
             except queue.Empty:
                 continue
             
-            user_name, text, audio_pcm = item
+            user_name, text, voice_prompt = item
             self.logger.info(f'TTS generating: "{text}" [as {user_name}]')
             
             self._speaking.set()
             try:
-                self._play_audio(audio_pcm)
+                self._stream_tts(text, voice_prompt)
+            except Exception as e:
+                self.logger.error(f"TTS streaming error: {e}")
+                traceback.print_exc()
             finally:
                 self._speaking.clear()
                 time.sleep(0.3)  # Brief pause after speaking
 
-    def _play_audio(self, pcm_data: bytes):
-        """Play PCM audio through Mumble."""
-        chunk_size = 48000 * 2 // 50  # 20ms chunks at 48kHz, 16-bit (1920 bytes)
-        total_chunks = (len(pcm_data) + chunk_size - 1) // chunk_size
-        self.logger.debug(f"Playing {len(pcm_data)} bytes in {total_chunks} chunks")
+    def _stream_tts(self, text: str, voice_prompt: dict):
+        """Stream TTS audio directly to Mumble as it's generated."""
+        tts_start = time.time()
+        total_audio_samples = 0
+        first_chunk = True
         
-        for i in range(0, len(pcm_data), chunk_size):
-            if self._shutdown.is_set():
-                break
+        # Use generate_speech_streaming if available (shared TTS from mumble_tts_bot)
+        # Falls back to generate_speech for standalone mode
+        if hasattr(self.tts, 'generate_speech_streaming'):
+            # Streaming mode - yield audio sentence by sentence
+            for wav_chunk in self.tts.generate_speech_streaming(
+                text, voice_prompt, num_steps=4, speed=1.0
+            ):
+                if self._shutdown.is_set():
+                    break
+                    
+                if first_chunk:
+                    first_audio_time = time.time() - tts_start
+                    self.logger.info(f"TTS first audio: {first_audio_time*1000:.0f}ms")
+                    first_chunk = False
+                
+                # Convert tensor to PCM and send to Mumble
+                wav_float = wav_chunk.numpy().squeeze() if hasattr(wav_chunk, 'numpy') else wav_chunk
+                if hasattr(wav_chunk, 'cpu'):
+                    wav_float = wav_chunk.cpu().numpy().squeeze()
+                wav_float = np.clip(wav_float, -1.0, 1.0)
+                pcm = (wav_float * 32767).astype(np.int16)
+                chunk_samples = len(pcm)
+                total_audio_samples += chunk_samples
+                
+                # Send to Mumble
+                self.mumble.sound_output.add_sound(pcm.tobytes())
+                
+                # Wait for most of audio to play before generating next chunk
+                # This creates natural pacing and prevents buffer overflow
+                chunk_duration_sec = chunk_samples / 48000
+                wait_time = chunk_duration_sec * 0.9 + 0.15  # 150ms between sentences
+                if wait_time > 0.1:
+                    time.sleep(wait_time)
+        else:
+            # Non-streaming fallback (standalone mode with basic LuxTTS)
+            audio = self.tts.generate_speech(text, voice_prompt, num_steps=4, speed=1.0)
+            if hasattr(audio, 'cpu'):
+                audio_np = audio.cpu().numpy().squeeze()
+            elif hasattr(audio, 'numpy'):
+                audio_np = audio.numpy().squeeze()
+            else:
+                audio_np = np.array(audio).squeeze()
+            audio_np = np.clip(audio_np, -1.0, 1.0)
+            pcm = (audio_np * 32767).astype(np.int16)
+            total_audio_samples = len(pcm)
             
-            chunk = pcm_data[i:i + chunk_size]
-            if len(chunk) < chunk_size:
-                # Pad the last chunk
-                chunk = chunk + b'\x00' * (chunk_size - len(chunk))
+            first_audio_time = time.time() - tts_start
+            self.logger.info(f"TTS first audio: {first_audio_time*1000:.0f}ms")
             
-            self.mumble.sound_output.add_sound(chunk)
-            time.sleep(0.018)  # ~20ms per chunk
+            # Stream to Mumble in chunks
+            pcm_bytes = pcm.tobytes()
+            chunk_size = 48000 * 2 // 50  # 20ms chunks
+            for i in range(0, len(pcm_bytes), chunk_size):
+                if self._shutdown.is_set():
+                    break
+                chunk = pcm_bytes[i:i + chunk_size]
+                if len(chunk) < chunk_size:
+                    chunk = chunk + b'\x00' * (chunk_size - len(chunk))
+                self.mumble.sound_output.add_sound(chunk)
+                time.sleep(0.018)
         
-        self.logger.debug("Finished playing audio")
+        tts_total = time.time() - tts_start
+        audio_duration_ms = (total_audio_samples / 48000) * 1000
+        self.logger.info(f"TTS complete: {tts_total*1000:.0f}ms synthesis, {audio_duration_ms:.0f}ms audio")
 
 
 def main():
