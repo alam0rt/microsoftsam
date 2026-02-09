@@ -355,7 +355,14 @@ class ToolsConfig:
     Attributes:
         enabled: Whether tools are enabled.
         max_iterations: Maximum tool execution iterations per turn.
-        web_search: Web search tool configuration.
+        web_search_enabled: Enable web search tool.
+        web_search_max_results: Number of web search results.
+        web_search_timeout: Web search timeout in seconds.
+        sound_effects_enabled: Enable sound effects tool.
+        sound_effects_dir: Directory containing sound effect files.
+        sound_effects_auto_play: Allow LLM to proactively play sounds.
+        sound_effects_web_search: Allow searching MyInstants.com for sounds.
+        sound_effects_cache: Cache downloaded sounds locally.
     """
     enabled: bool = True
     max_iterations: int = 5
@@ -364,6 +371,13 @@ class ToolsConfig:
     web_search_enabled: bool = True
     web_search_max_results: int = 5
     web_search_timeout: float = 10.0
+
+    # Sound effects settings
+    sound_effects_enabled: bool = False  # Disabled by default
+    sound_effects_dir: str | None = None  # Path to sound effects directory
+    sound_effects_auto_play: bool = True  # Allow LLM to proactively play sounds
+    sound_effects_web_search: bool = True  # Allow searching MyInstants.com
+    sound_effects_cache: bool = True  # Cache downloaded sounds locally
 
 
 @dataclass

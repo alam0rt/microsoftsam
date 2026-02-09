@@ -121,12 +121,14 @@ try:
     from mumble_voice_bot.tools import ToolRegistry
     from mumble_voice_bot.tools.web_search import WebSearchTool
     from mumble_voice_bot.tools.souls import SoulsTool
+    from mumble_voice_bot.tools.sound_effects import SoundEffectsTool
     TOOLS_AVAILABLE = True
 except ImportError as e:
     TOOLS_AVAILABLE = False
     ToolRegistry = None
     WebSearchTool = None
     SoulsTool = None
+    SoundEffectsTool = None
     logger.warning(f"Tool system not available: {e}")
 
 
@@ -457,6 +459,8 @@ class MumbleVoiceBot:
         barge_in_enabled: bool = True,
         # Soul configuration
         soul_config=None,  # SoulConfig object with themed fallbacks
+        # Tools configuration
+        tools_config=None,  # ToolsConfig for tool settings
     ):
         self.host = host
         self.user = user
@@ -467,6 +471,7 @@ class MumbleVoiceBot:
         self.num_steps = num_steps
         self.voices_dir = voices_dir
         self.soul_config = soul_config  # Soul-specific themed responses
+        self.tools_config = tools_config  # Tool-specific configuration
         self._current_soul_name = None  # Track active soul name for tool queries
 
         # VAD settings
@@ -955,7 +960,48 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         )
         self.tools.register(souls_tool)
 
+        # Register sound effects tool if configured
+        if (
+            self.tools_config
+            and self.tools_config.sound_effects_enabled
+            and self.tools_config.sound_effects_dir
+            and SoundEffectsTool is not None
+        ):
+            sound_effects_tool = SoundEffectsTool(
+                sounds_dir=self.tools_config.sound_effects_dir,
+                play_callback=self._play_sound_effect,
+                auto_play=self.tools_config.sound_effects_auto_play,
+                sample_rate=48000,  # Mumble uses 48kHz
+                enable_web_search=getattr(self.tools_config, 'sound_effects_web_search', True),
+                cache_web_sounds=getattr(self.tools_config, 'sound_effects_cache', True),
+            )
+            self.tools.register(sound_effects_tool)
+            web_status = "with web search" if getattr(self.tools_config, 'sound_effects_web_search', True) else "local only"
+            print(f"[Tools] Sound effects enabled ({web_status}) from {self.tools_config.sound_effects_dir}")
+
         print(f"[Tools] Initialized with {len(self.tools)} tool(s): {self.tools.tool_names}")
+
+    async def _play_sound_effect(self, pcm_bytes: bytes, sample_rate: int) -> None:
+        """Play a sound effect through Mumble.
+        
+        Args:
+            pcm_bytes: Raw PCM audio data (16-bit, mono).
+            sample_rate: Sample rate of the audio.
+        """
+        if not hasattr(self, 'mumble') or not self.mumble:
+            raise RuntimeError("Mumble not initialized")
+        
+        # Convert sample rate if needed (Mumble expects 48kHz)
+        if sample_rate != 48000:
+            import numpy as np
+            pcm_array = np.frombuffer(pcm_bytes, dtype=np.int16)
+            num_samples = int(len(pcm_array) * 48000 / sample_rate)
+            indices = np.linspace(0, len(pcm_array) - 1, num_samples)
+            pcm_array = np.interp(indices, np.arange(len(pcm_array)), pcm_array)
+            pcm_bytes = pcm_array.astype(np.int16).tobytes()
+        
+        # Add sound to Mumble output
+        self.mumble.sound_output.add_sound(pcm_bytes)
 
     async def _check_keyword_tools(self, text: str) -> str | None:
         """Check for keyword-based tool triggers.
@@ -2329,6 +2375,7 @@ def main():
         max_response_staleness=max_response_staleness,
         barge_in_enabled=barge_in_enabled,
         soul_config=config.soul_config if config else None,
+        tools_config=config.tools if config else None,
     )
 
     bot.start()

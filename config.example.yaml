@@ -94,3 +94,13 @@ tools:
   web_search_enabled: true    # Enable web search capability
   web_search_max_results: 5   # Number of search results to return
   web_search_timeout: 10.0    # Search request timeout in seconds
+  
+  # Sound effects tool settings
+  # The bot can play sound effects like a soundboard DJ!
+  # It can search MyInstants.com for any sound and play memes, game sounds, etc.
+  sound_effects_enabled: false  # Enable sound effects capability
+  sound_effects_dir: null       # Path to sound effects cache directory (e.g., "./sounds")
+  sound_effects_auto_play: true # Allow bot to proactively play contextually appropriate sounds
+                                # e.g., playing "Among Us" sound when someone says "sus"
+  sound_effects_web_search: true  # Allow searching MyInstants.com for sounds on-demand
+  sound_effects_cache: true       # Cache downloaded sounds locally for faster replay
