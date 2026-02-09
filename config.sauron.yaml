@@ -6,23 +6,24 @@ personas:
     mumble:
       user: "Parrot"
       channel: null  # Join root/default channel
-  - name: raf
-    soul: raf
-    mumble:
-      user: "Raf"
-      channel: null  # Join root/default channel
-    tts:
-      ref_audio: "souls/raf/audio/raf.wav"
-    respond_to_other_personas: true  # Raf can hear and respond to Zapp
 
-  - name: zapp
-    soul: zapp
-    mumble:
-      user: "Zapp"
-      channel: null  # Join root/default channel
-    tts:
-      ref_audio: "souls/zapp/audio/zapp.wav"
-    respond_to_other_personas: true  # Zapp can hear and respond to Raf
+  # - name: raf
+  #   soul: raf
+  #   mumble:
+  #     user: "Raf"
+  #     channel: null  # Join root/default channel
+  #   tts:
+  #     ref_audio: "souls/raf/audio/raf.wav"
+  #   respond_to_other_personas: true  # Raf can hear and respond to Zapp
+
+  # - name: zapp
+  #   soul: zapp
+  #   mumble:
+  #     user: "Zapp"
+  #     channel: null  # Join root/default channel
+  #   tts:
+  #     ref_audio: "souls/zapp/audio/zapp.wav"
+  #   respond_to_other_personas: true  # Zapp can hear and respond to Raf
 
 # Shared services configuration
 shared:
