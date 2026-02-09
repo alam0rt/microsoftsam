@@ -243,7 +243,7 @@ Always use the tool when the user asks to switch personality/soul or search for 
         """
         return {
             "role": "user",
-            "content": f"[Tool Result from {tool_name}]: {result}\n\nPlease summarize the above results for the user in a conversational way.",
+            "content": f"[Tool Result from {tool_name}]: {result}\n\nReact naturally to this, staying in character.",
         }
     
     def strip_tool_calls(self, response_text: str) -> str:
