@@ -195,9 +195,10 @@ class OpenAIChatLLM(LLMProvider):
         headers = self._build_headers()
         body = self._build_request_body(messages, tools)
 
-        # Log the request
+        # Log the request with context size
         user_message = messages[-1].get("content", "") if messages else ""
-        logger.info(f'LLM request: "{user_message[:100]}..."' if len(user_message) > 100 else f'LLM request: "{user_message}"')
+        context_count = len(messages) - 1  # Exclude current message
+        logger.info(f'LLM request ({context_count} ctx msgs): "{user_message[:100]}..."' if len(user_message) > 100 else f'LLM request ({context_count} ctx msgs): "{user_message}"')
         if tools:
             logger.info(f"LLM request includes {len(tools)} tool(s): {[t.get('function', {}).get('name', '?') for t in tools]}")
 

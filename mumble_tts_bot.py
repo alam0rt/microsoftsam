@@ -1977,7 +1977,8 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         finally:
             # Brief delay after synthesis before clearing _speaking flag
             # This helps prevent feedback from tail-end of audio playback
-            time.sleep(0.3)
+            # Network latency can cause echo to arrive late, so we wait a bit longer
+            time.sleep(0.5)
 
             # Clear any audio that accumulated during TTS playback
             for user_id in list(self.audio_buffers.keys()):
