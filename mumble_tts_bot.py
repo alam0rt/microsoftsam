@@ -2,7 +2,7 @@
 """
 Mumble Voice Bot - LLM-powered voice assistant for Mumble.
 
-Listens to voice in a Mumble channel, transcribes with Whisper, generates
+Listens to voice in a Mumble channel, transcribes with NeMo Nemotron ASR, generates
 responses with an LLM, and speaks back using LuxTTS voice cloning.
 
 Usage:
@@ -978,7 +978,7 @@ class MumbleVoiceBot:
         self.speech_start_time = {}  # user_id -> timestamp
         self.speech_hold_duration = 0.6  # seconds of silence before processing
         self.min_speech_duration = 0.3  # minimum seconds to transcribe
-        self.max_speech_duration = 5.0  # force processing after 5 seconds (keeps Whisper fast)
+        self.max_speech_duration = 5.0  # force processing after 5 seconds (keeps ASR fast)
 
         # Response staleness settings
         self.max_response_staleness = max_response_staleness  # skip responses older than this (seconds)
