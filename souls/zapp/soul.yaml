@@ -24,3 +24,28 @@ voice:
 # Mumble settings
 mumble:
   username: "Zapp"
+
+# Event-driven responses (bypass LLM, go direct to TTS)
+on:
+  # First time a user speaks - Zapp's flirtatious greeting
+  user_first_speech:
+    - "Ah, {user}. As I live and breathe."
+    - "Well well well, if it isn't {user}."
+    - "{user}! How fortunate for you to be in my presence."
+  
+  # When processing a question
+  thinking:
+    - "Hmm, let me consult my... vast intellect."
+    - "Ah yes..."
+    - "One moment..."
+  
+  # When LLM is taking too long
+  still_thinking:
+    - "The Zapper is still formulating his brilliant response."
+    - "Patience. Genius takes time."
+  
+  # When interrupted
+  interrupted:
+    - "I shall try to forget this transgression."
+    - "How dare... I mean, go ahead."
+    - "Hmph."

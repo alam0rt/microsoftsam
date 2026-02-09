@@ -479,8 +479,8 @@ class TestBotUtteranceHandling:
         MumbleVoiceBot._on_bot_utterance(mock_bot, "Zapp", "Greetings!")
 
         mock_bot.logger.info.assert_called()
-        call_str = str(mock_bot.logger.info.call_args)
-        assert "Heard" in call_str
+        call_str = str(mock_bot.logger.info.call_args_list)
+        assert "BOT-HEARD" in call_str
         assert "Zapp" in call_str
 
     def test_no_response_without_talks_to_bots(self, mock_bot, soul_config_no_talk):
@@ -552,7 +552,7 @@ class TestBotUtteranceHandling:
 
         MumbleVoiceBot._on_bot_utterance(mock_bot, "Zapp", long_text)
 
-        call_str = str(mock_bot.logger.info.call_args)
+        call_str = str(mock_bot.logger.info.call_args_list)
         assert "..." in call_str  # Should be truncated
         assert "A" * 50 in call_str  # First 50 chars
 

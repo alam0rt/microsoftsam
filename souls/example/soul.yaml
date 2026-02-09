@@ -75,21 +75,35 @@ fallbacks:
     - "Hmm, something went wrong."
     - "Uh, I'm having trouble with that."
     - "Sorry, I can't do that right now."
+
+# Event-driven responses (bypass LLM, go direct to TTS)
+# Use {user} placeholder for the username
+# Set to null or empty list to disable an event
+on:
+  # First time a user speaks this session
+  user_first_speech:
+    - "Hey {user}!"
+    - "Oh, hey {user}."
   
-  # Conversational fillers (optional - these have good defaults)
-  # Quick thinking phrases when processing questions
+  # When processing a question (quick filler)
   thinking:
     - "Hmm..."
     - "Let me think..."
-    - "Umm..."
   
-  # Phrases when LLM is taking a long time (>5s)
+  # When LLM is taking too long (>5s)
   still_thinking:
     - "Still thinking..."
     - "Bear with me..."
   
-  # What to say when interrupted (barge-in)
+  # When user interrupts (barge-in) - usually suppressed
   interrupted:
     - "Oh, sorry."
     - "Go ahead."
-    - "Yes?"
+  
+  # Optional: when user joins channel (can be noisy, disabled by default)
+  # user_joined:
+  #   - "Welcome, {user}!"
+  
+  # Optional: when user leaves channel
+  # user_left:
+  #   - "See ya, {user}."

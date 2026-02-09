@@ -60,3 +60,28 @@ fallbacks:
     - "This is like the Potion Seller all over again..."
     - "Why won't this work? I need it for battle!"
     - "You're a rascal with no respect for knights!"
+
+# Event-driven responses (bypass LLM, go direct to TTS)
+on:
+  # First time a user speaks - desperate greeting
+  user_first_speech:
+    - "{user}! Perhaps you can help me. I need potions!"
+    - "Hello, {user}! I am going into battle!"
+    - "{user}! Please, I need your strongest potions!"
+  
+  # When processing a question
+  thinking:
+    - "Hmm..."
+    - "Let me think..."
+    - "One moment..."
+  
+  # When LLM is taking too long
+  still_thinking:
+    - "I'm a knight going into battle, I don't have time!"
+    - "Please, I need an answer!"
+  
+  # When interrupted
+  interrupted:
+    - "What? What is it?"
+    - "Yes?"
+    - "Please, I need potions!"

@@ -379,6 +379,47 @@ class SoulFallbacks:
 
 
 @dataclass
+class SoulEvents:
+    """Event-triggered responses that bypass the LLM.
+    
+    These are spoken directly via TTS when specific events occur.
+    Use {user} placeholder for the username. Use null/empty to disable.
+    
+    Attributes:
+        user_first_speech: When a user speaks for the first time this session.
+        user_joined: When a user joins the channel (if you want TTS, not just log).
+        user_left: When a user leaves the channel.
+        interrupted: What to say when user interrupts (barge-in).
+        thinking: Quick filler when processing a question.
+        still_thinking: When LLM is taking too long (>5s).
+        wake_word_detected: When wake word is heard.
+        tool_started: When a tool starts executing.
+        tool_completed: When a tool finishes.
+    """
+    user_first_speech: list[str] | None = field(default_factory=lambda: [
+        "Hey {user}!",
+        "Oh, hey {user}.",
+    ])
+    user_joined: list[str] | None = None  # Disabled by default (can be noisy)
+    user_left: list[str] | None = None  # Disabled by default
+    interrupted: list[str] | None = field(default_factory=lambda: [
+        "Oh, sorry.",
+        "Go ahead.",
+    ])
+    thinking: list[str] | None = field(default_factory=lambda: [
+        "Hmm...",
+        "Let me think...",
+    ])
+    still_thinking: list[str] | None = field(default_factory=lambda: [
+        "Still thinking...",
+        "Bear with me...",
+    ])
+    wake_word_detected: list[str] | None = None  # e.g., "Yes?"
+    tool_started: list[str] | None = None  # e.g., "Let me look that up..."
+    tool_completed: list[str] | None = None  # e.g., "Found it!"
+
+
+@dataclass
 class SoulConfig:
     """Soul configuration for character/personality theming.
 
@@ -395,6 +436,7 @@ class SoulConfig:
         weights: Custom model weights paths.
         llm: LLM behavior overrides (temperature, max_tokens, etc).
         fallbacks: Fallback responses themed to the character.
+        events: Event-triggered responses (bypass LLM, go direct to TTS).
         talks_to_bots: Whether this bot responds to other bots' utterances.
     """
     name: str = "Default Soul"
@@ -408,6 +450,7 @@ class SoulConfig:
     })
     llm: dict[str, Any] = field(default_factory=dict)
     fallbacks: SoulFallbacks = field(default_factory=SoulFallbacks)
+    events: SoulEvents = field(default_factory=SoulEvents)
     talks_to_bots: bool = False  # Whether to respond to other bots
 
 
@@ -544,6 +587,22 @@ def load_soul_config(
         interrupted=fallbacks_data.get("interrupted", default_fallbacks.interrupted),
     )
 
+    # Build events config (event-driven TTS responses)
+    # Can be under "events" or "on" key for nicer YAML
+    events_data = config_data.get("events", config_data.get("on", {}))
+    default_events = SoulEvents()
+    events = SoulEvents(
+        user_first_speech=events_data.get("user_first_speech", default_events.user_first_speech),
+        user_joined=events_data.get("user_joined", default_events.user_joined),
+        user_left=events_data.get("user_left", default_events.user_left),
+        interrupted=events_data.get("interrupted", default_events.interrupted),
+        thinking=events_data.get("thinking", default_events.thinking),
+        still_thinking=events_data.get("still_thinking", default_events.still_thinking),
+        wake_word_detected=events_data.get("wake_word_detected", default_events.wake_word_detected),
+        tool_started=events_data.get("tool_started", default_events.tool_started),
+        tool_completed=events_data.get("tool_completed", default_events.tool_completed),
+    )
+
     return SoulConfig(
         name=config_data.get("name", soul_name),
         description=config_data.get("description", ""),
@@ -553,6 +612,7 @@ def load_soul_config(
         weights=config_data.get("weights", {"tts_model": None, "voice_encoder": None}),
         llm=config_data.get("llm", {}),
         fallbacks=fallbacks,
+        events=events,
         talks_to_bots=config_data.get("talks_to_bots", False),
     )
 

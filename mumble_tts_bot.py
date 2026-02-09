@@ -571,20 +571,24 @@ class SharedBotServices:
 
             if claim_key in self._response_claims:
                 # Already claimed by someone - yield
+                logger.info(f"[CLAIM] REJECTED - already claimed: user={user_id}, text='{text_key[:30]}...'")
                 return False
             # Claim it (just record timestamp, not who)
             self._response_claims[claim_key] = now
+            logger.info(f"[CLAIM] SUCCESS - claimed response: user={user_id}, text='{text_key[:30]}...'")
             return True
 
     def bot_started_speaking(self) -> None:
         """Called when a bot starts speaking."""
         with self._speaking_lock:
             self._speaking_count += 1
+            logger.info(f"[SPEAKING] Bot started speaking (count now: {self._speaking_count})")
 
     def bot_stopped_speaking(self) -> None:
         """Called when a bot stops speaking."""
         with self._speaking_lock:
             self._speaking_count = max(0, self._speaking_count - 1)
+            logger.info(f"[SPEAKING] Bot stopped speaking (count now: {self._speaking_count})")
 
     def any_bot_speaking(self) -> bool:
         """Check if any bot in this shared group is speaking."""
@@ -747,9 +751,12 @@ class SharedBotServices:
         """
         # Log to event journal as bot_message
         self.log_event("bot_message", speaker_name, text)
+        logger.info(f"[BROADCAST] {speaker_name} speaking: '{text[:50]}...'" if len(text) > 50 else f"[BROADCAST] {speaker_name} speaking: '{text}'")
         
         if not hasattr(self, '_utterance_listeners'):
             self._utterance_listeners = []
+        listener_count = len(self._utterance_listeners)
+        logger.debug(f"[BROADCAST] Notifying {listener_count} listeners")
         for callback in self._utterance_listeners:
             try:
                 callback(speaker_name, text)
@@ -1086,6 +1093,9 @@ class MumbleVoiceBot:
         # Filler state tracking
         self._llm_thinking_since: float | None = None  # When LLM call started (for "still thinking" timer)
         self._still_thinking_timer: threading.Timer | None = None
+
+        # Event tracking - users we've already greeted this session
+        self._greeted_users: set[str] = set()  # Track who we've said "first speech" greeting to
 
         # Stats tracking
         self._stats_interval = 30  # Log stats every 30 seconds
@@ -2453,7 +2463,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         if speaker_name == self.user:
             return
 
-        self.logger.info(f'Heard (from {speaker_name}): "{text[:50]}..."' if len(text) > 50 else f'Heard (from {speaker_name}): "{text}"')
+        self.logger.info(f"[BOT-HEARD] {self.user} heard {speaker_name}: '{text[:50]}...'" if len(text) > 50 else f"[BOT-HEARD] {self.user} heard {speaker_name}: '{text}'")
 
         # Check if this bot is configured to talk to other bots
         talks_to_bots = False
@@ -2462,7 +2472,10 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         
         if not talks_to_bots:
             # Just observe for context, don't respond
+            self.logger.info(f"[BOT-HEARD] {self.user} NOT responding (talks_to_bots=False)")
             return
+        
+        self.logger.info(f"[BOT-HEARD] {self.user} WILL respond (talks_to_bots=True)")
 
         # Don't respond if we're currently speaking
         if self._speaking.is_set():
@@ -2482,6 +2495,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             import time as time_module
             # Randomize delay so bots don't respond in lockstep
             delay = 0.5 + random.random() * 1.5  # 0.5-2.0 seconds
+            self.logger.info(f"[BOT-RESPOND] {self.user} waiting {delay:.1f}s before responding to {speaker_name}")
             time_module.sleep(delay)
             
             # Retry loop: wait for other bots to finish speaking
@@ -2489,19 +2503,22 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             waited = 0.0
             while waited < max_wait:
                 if self._shared_services.any_bot_speaking():
+                    self.logger.debug(f"[BOT-RESPOND] {self.user} waiting - another bot speaking (waited {waited:.1f}s)")
                     time_module.sleep(0.5)
                     waited += 0.5
                     continue
                 if self._speaking.is_set():
+                    self.logger.debug(f"[BOT-RESPOND] {self.user} waiting - I'm speaking (waited {waited:.1f}s)")
                     time_module.sleep(0.5)
                     waited += 0.5
                     continue
                 # Nobody speaking - try to respond
+                self.logger.info(f"[BOT-RESPOND] {self.user} attempting response to {speaker_name}")
                 # skip_history_add=True because bot_message is already logged by broadcast_utterance
                 self._maybe_respond(user_id, speaker_name, force=True, skip_history_add=True)
                 return
             
-            self.logger.debug(f"Gave up waiting to respond to {speaker_name}")
+            self.logger.warning(f"[BOT-RESPOND] {self.user} gave up waiting to respond to {speaker_name} after {max_wait}s")
 
         threading.Thread(target=delayed_respond, daemon=True).start()
 
@@ -2567,11 +2584,20 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
                 self.logger.info(f'Generating response for {user_name}: "{text}"')
                 
+                # Check for first-time speaker event (only for humans, not bots)
+                # Bot-to-bot messages have negative user_id from hash
+                if user_id >= 0 and user_name and self._check_first_time_speaker(user_name):
+                    # Trigger first speech event - this speaks a greeting
+                    if self._trigger_event('user_first_speech', user_name):
+                        # If we spoke a greeting, add a small pause before continuing
+                        import time as time_module
+                        time_module.sleep(0.3)
+                
                 # Speak a thinking filler if this looks like a question
                 # This fills the gap while LLM processes and feels more natural
                 if self._is_question(text):
                     self.logger.debug("Detected question - speaking thinking filler")
-                    self._speak_filler('thinking')
+                    self._trigger_event('thinking', user_name) or self._speak_filler('thinking')
                 
                 # Start "still thinking" timer in case LLM is slow
                 self._llm_thinking_since = time.time()
@@ -2955,7 +2981,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
     # =========================================================================
 
     def _get_filler(self, filler_type: str) -> str | None:
-        """Get a random filler phrase from soul config.
+        """Get a random filler phrase from soul config (fallbacks).
         
         Args:
             filler_type: One of 'thinking', 'still_thinking', 'interrupted'
@@ -2973,6 +2999,74 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             return None
             
         return random.choice(fillers)
+
+    def _get_event_response(self, event_type: str, user: str = None) -> str | None:
+        """Get a random event-triggered response from soul config.
+        
+        Args:
+            event_type: Event name (e.g., 'user_first_speech', 'interrupted')
+            user: Username for {user} placeholder substitution.
+            
+        Returns:
+            Response string with placeholders filled, or None if disabled/unavailable.
+        """
+        import random
+        
+        if not self.soul_config or not self.soul_config.events:
+            return None
+            
+        responses = getattr(self.soul_config.events, event_type, None)
+        if not responses:
+            return None
+            
+        response = random.choice(responses)
+        
+        # Fill in placeholders
+        if user:
+            response = response.replace("{user}", user)
+        
+        return response
+
+    def _trigger_event(self, event_type: str, user: str = None) -> bool:
+        """Trigger an event and speak the response if configured.
+        
+        Args:
+            event_type: Event name (e.g., 'user_first_speech', 'interrupted')
+            user: Username for placeholder substitution.
+            
+        Returns:
+            True if event was handled (response spoken), False otherwise.
+        """
+        response = self._get_event_response(event_type, user)
+        if not response:
+            self.logger.debug(f"[EVENT] {event_type} - no response configured")
+            return False
+        
+        self.logger.info(f"[EVENT] {event_type} for {user or 'unknown'} - speaking: '{response}'")
+        
+        # Speak directly via TTS (bypasses LLM)
+        try:
+            self._speak_sync(response, self.voice_prompt, None, None)
+            return True
+        except Exception as e:
+            self.logger.warning(f"[EVENT] Failed to speak event response: {e}")
+            return False
+
+    def _check_first_time_speaker(self, user_name: str) -> bool:
+        """Check if this is the first time we've heard from this user.
+        
+        Args:
+            user_name: The user's name.
+            
+        Returns:
+            True if this is their first speech this session.
+        """
+        if user_name in self._greeted_users:
+            return False
+        
+        self._greeted_users.add(user_name)
+        self.logger.info(f"[EVENT] First speech detected from: {user_name}")
+        return True
 
     def _is_question(self, text: str) -> bool:
         """Detect if text is likely a question (simple heuristics).
@@ -3009,36 +3103,35 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         """
         filler = self._get_filler(filler_type)
         if not filler:
+            self.logger.info(f"[FILLER] No filler available for type: {filler_type}")
             return
             
-        self.logger.debug(f"Speaking filler ({filler_type}): {filler}")
+        self.logger.info(f"[FILLER] Speaking ({filler_type}): '{filler}'")
         
         # Speak synchronously - this is quick and should complete fast
         try:
             self._speak_sync(filler, self.voice_prompt, None, None)
         except Exception as e:
-            self.logger.warning(f"Failed to speak filler: {e}")
+            self.logger.warning(f"[FILLER] Failed to speak filler: {e}")
 
     def _on_barge_in(self):
         """Called when user interrupts the bot (barge-in callback).
         
         Speaks a brief acknowledgment like "Oh, sorry" and stops speaking.
         """
-        self.logger.info("Barge-in detected - speaking interruption acknowledgment")
+        self.logger.info("[BARGE-IN] User interrupted bot - stopping speech")
         
         # Cancel any "still thinking" timer
         if self._still_thinking_timer:
             self._still_thinking_timer.cancel()
             self._still_thinking_timer = None
         
-        # Get interruption acknowledgment filler
-        filler = self._get_filler('interrupted')
-        if filler:
-            # We can't speak it now (we're being interrupted), but we could queue it
-            # Actually, on second thought - if we're interrupted, we should just stop.
-            # The filler would be weird to say after being cut off.
-            # Let's just log it for now. The interruption itself is the acknowledgment.
-            self.logger.debug(f"Would say: {filler} (but we're interrupted)")
+        # Try to get an interruption response from events config
+        response = self._get_event_response('interrupted')
+        if response:
+            # We could speak a quick acknowledgment after we stop
+            # But speaking while being interrupted is weird - log for now
+            self.logger.info(f"[BARGE-IN] Would have said: '{response}' (suppressed - being interrupted)")
         
         # Clear the speaking flag (handled by turn controller)
 
@@ -3052,10 +3145,12 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         if self._still_thinking_timer:
             self._still_thinking_timer.cancel()
         
+        self.logger.debug(f"[TIMER] Starting 'still thinking' timer ({timeout_sec}s)")
+        
         def _on_still_thinking():
             # Only fire if we're still waiting for LLM
             if self._llm_thinking_since is not None:
-                self.logger.info("LLM taking long - speaking 'still thinking' filler")
+                self.logger.info("[TIMER] LLM taking long - speaking 'still thinking' filler")
                 self._speak_filler('still_thinking')
         
         self._still_thinking_timer = threading.Timer(timeout_sec, _on_still_thinking)

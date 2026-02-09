@@ -30,3 +30,27 @@ weights:
 llm:
   temperature: 0.7
   max_tokens: 150
+
+# Event-driven responses (bypass LLM, go direct to TTS)
+on:
+  # First time a user speaks
+  user_first_speech:
+    - "Hey {user}!"
+    - "Oh hey, {user}. What's up?"
+    - "G'day {user}."
+  
+  # When processing a question
+  thinking:
+    - "Hmm..."
+    - "Let me think..."
+    - "Uhh..."
+  
+  # When LLM is taking too long
+  still_thinking:
+    - "Still thinking..."
+    - "One sec..."
+  
+  # When interrupted
+  interrupted:
+    - "Oh, sorry."
+    - "Go ahead."
