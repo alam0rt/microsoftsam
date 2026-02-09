@@ -980,6 +980,16 @@ class MumbleVoiceBot:
         self.min_speech_duration = 0.3  # minimum seconds to transcribe
         self.max_speech_duration = 5.0  # force processing after 5 seconds (keeps ASR fast)
 
+        # Long speech tracking (for triggering long_speech_ended event)
+        self.user_total_speech_time = {}  # user_id -> accumulated speech duration this utterance
+        self.long_speech_threshold = 15.0  # seconds - trigger event if user talks longer than this
+
+        # Channel quiet tracking
+        self._last_channel_activity = time.time()
+        self._quiet_threshold = 60.0  # seconds before triggering channel_quiet event
+        self._quiet_timer = None
+        self._quiet_event_triggered = False  # Prevent repeated triggers
+
         # Response staleness settings
         self.max_response_staleness = max_response_staleness  # skip responses older than this (seconds)
 
@@ -2019,7 +2029,20 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             iteration += 1
 
             # Call LLM with tools (pass bot name for debug logging)
-            response = await self.llm.chat(messages, tools=tools, bot_name=self.user)
+            try:
+                response = await self.llm.chat(messages, tools=tools, bot_name=self.user)
+            except Exception as e:
+                # Check for rate limiting (HTTP 429)
+                error_str = str(e).lower()
+                if "429" in error_str or "rate" in error_str or "too many" in error_str:
+                    logger.warning(f"Rate limited by LLM API: {e}")
+                    # Trigger rate_limited event for themed response
+                    fallback = self._trigger_event('rate_limited')
+                    if fallback:
+                        return fallback
+                    return "I need a moment to collect my thoughts..."
+                # Re-raise other errors
+                raise
 
             # If LLM wants to call tools, execute them
             if response.has_tool_calls:
@@ -2326,6 +2349,10 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             self.logger.info(f'ASR ({transcribe_time*1000:.0f}ms): "{text}" [from {user_name}, {buffer_duration:.1f}s audio]')
             if transcribe_time > 2.0:
                 self.logger.warning(f"ASR slow: {transcribe_time*1000:.0f}ms (>2s)")
+
+            # Record channel activity (for quiet timer) and check for long speech
+            self._record_channel_activity()
+            self._check_long_speech(user_id, user_name, buffer_duration)
 
             # --- Speech Filtering ---
 
@@ -3042,6 +3069,59 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             self.logger.warning(f"[EVENT] Failed to speak event response: {e}")
             return False
 
+    def _record_channel_activity(self):
+        """Record that activity occurred in the channel (resets quiet timer)."""
+        self._last_channel_activity = time.time()
+        self._quiet_event_triggered = False  # Allow quiet event to trigger again
+
+    def _check_channel_quiet(self):
+        """Check if channel has been quiet and trigger event if so."""
+        if self._quiet_event_triggered:
+            return  # Already triggered, wait for activity
+
+        time_since_activity = time.time() - self._last_channel_activity
+        if time_since_activity >= self._quiet_threshold:
+            self._quiet_event_triggered = True
+            self.logger.info(f"[EVENT] Channel quiet for {time_since_activity:.0f}s, triggering event")
+            self._trigger_event('channel_quiet')
+
+    def _start_quiet_timer(self):
+        """Start background thread to check for channel quiet."""
+        def quiet_check_loop():
+            while self._running:
+                time.sleep(10)  # Check every 10 seconds
+                if self._running:
+                    self._check_channel_quiet()
+
+        self._quiet_timer = threading.Thread(target=quiet_check_loop, daemon=True)
+        self._quiet_timer.start()
+
+    def _check_long_speech(self, user_id: int, user_name: str, speech_duration: float):
+        """Track speech duration and trigger event if user talked for a long time.
+
+        Args:
+            user_id: The user's session ID.
+            user_name: The user's name.
+            speech_duration: Duration of this speech segment in seconds.
+        """
+        # Accumulate speech duration for this user
+        if user_id not in self.user_total_speech_time:
+            self.user_total_speech_time[user_id] = 0.0
+
+        self.user_total_speech_time[user_id] += speech_duration
+
+        # Check if they've exceeded the threshold
+        total = self.user_total_speech_time[user_id]
+        if total >= self.long_speech_threshold:
+            self.logger.info(f"[EVENT] {user_name} spoke for {total:.1f}s total, triggering long_speech_ended")
+            self._trigger_event('long_speech_ended', user_name)
+            # Reset counter for next long speech
+            self.user_total_speech_time[user_id] = 0.0
+
+    def _reset_speech_tracking(self, user_id: int):
+        """Reset speech tracking for a user (e.g., when they stop talking)."""
+        self.user_total_speech_time.pop(user_id, None)
+
     def _check_first_time_speaker(self, user_name: str) -> bool:
         """Check if this is the first time we've heard from this user.
 
@@ -3318,6 +3398,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
     def start(self):
         """Start the bot."""
+        self._running = True
         self.mumble.start()
         self.mumble.is_ready()
         print("[Mumble] Connected!")
@@ -3330,6 +3411,9 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             except Exception as e:
                 logger.error(f"Failed to join channel '{self.channel}': {e}", exc_info=True)
 
+        # Start quiet timer for channel_quiet events
+        self._start_quiet_timer()
+
     def run_forever(self):
         """Keep the bot running."""
         print("[Bot] Running. Press Ctrl+C to stop.")
@@ -3338,6 +3422,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 time.sleep(1)
         except KeyboardInterrupt:
             print("\n[Bot] Shutting down...")
+            self._running = False
             self._shutdown.set()
             self._tts_queue.join()
             self._asr_executor.shutdown(wait=True)

@@ -167,6 +167,7 @@ class TestMumbleVoiceBotSharedServices:
 
         mock_tts = MagicMock()
         mock_tts.generate_speech_streaming = MagicMock(return_value=iter([]))
+        mock_stt = MagicMock()
 
         # This should not raise
         with patch('mumble_tts_bot.pymumble.Mumble'):
@@ -178,6 +179,7 @@ class TestMumbleVoiceBotSharedServices:
                                 host="localhost",
                                 user="TestBot",
                                 shared_tts=mock_tts,
+                                shared_stt=mock_stt,
                                 voice_prompt={"embedding": torch.randn(1, 256)},
                             )
 
@@ -189,6 +191,7 @@ class TestMumbleVoiceBotSharedServices:
         from mumble_tts_bot import MumbleVoiceBot
 
         mock_llm = MagicMock()
+        mock_stt = MagicMock()
 
         with patch('mumble_tts_bot.pymumble.Mumble'):
             with patch.object(MumbleVoiceBot, '_load_reference_voice'):
@@ -200,6 +203,7 @@ class TestMumbleVoiceBotSharedServices:
                                     host="localhost",
                                     user="TestBot",
                                     shared_llm=mock_llm,
+                                    shared_stt=mock_stt,
                                 )
 
                                 assert bot.llm is mock_llm

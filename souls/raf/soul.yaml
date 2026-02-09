@@ -62,3 +62,24 @@ responses:
     - "Go ahead."
     - "Yeah?"
     - "What's up?"
+  
+  # When someone talks for a really long time (>15s) then stops
+  long_speech_ended:
+    - "Wow, that was a lot."
+    - "Finally! I thought you'd never stop."
+    - "Mate, breathe."
+    - "Righto, quite the speech there."
+  
+  # When the channel has been quiet for a while (>60s)
+  channel_quiet:
+    - "It's quiet... too quiet."
+    - "Anyone still there?"
+    - "So... anyone wanna talk about Magic?"
+    - "Did everyone fall asleep?"
+  
+  # When the LLM API is rate limited
+  rate_limited:
+    - "Brain's a bit slow right now, gimme a sec."
+    - "Uh, hold on... thinking..."
+    - "Sorry, my brain just buffered."
+    - "One moment, bit laggy today."

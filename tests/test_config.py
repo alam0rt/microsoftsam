@@ -282,23 +282,24 @@ class TestSTTConfig:
     """Test STTConfig dataclass."""
 
     def test_default_values(self):
-        """Test default STT configuration."""
+        """Test default STT configuration (NeMo Nemotron only)."""
         config = STTConfig()
 
-        assert config.provider == "local"
-        assert config.wyoming_host is None
-        assert config.wyoming_port == 10300
+        assert config.nemotron_model == "nvidia/nemotron-speech-streaming-en-0.6b"
+        assert config.nemotron_chunk_ms == 160
+        assert config.nemotron_device == "cuda"
 
-    def test_wyoming_configuration(self):
-        """Test Wyoming STT configuration."""
+    def test_custom_nemotron_configuration(self):
+        """Test custom NeMo Nemotron STT configuration."""
         config = STTConfig(
-            provider="wyoming",
-            wyoming_host="localhost",
-            wyoming_port=10300,
+            nemotron_model="nvidia/custom-model",
+            nemotron_chunk_ms=560,
+            nemotron_device="cpu",
         )
 
-        assert config.provider == "wyoming"
-        assert config.wyoming_host == "localhost"
+        assert config.nemotron_model == "nvidia/custom-model"
+        assert config.nemotron_chunk_ms == 560
+        assert config.nemotron_device == "cpu"
 
 
 class TestPipelineBotConfig:

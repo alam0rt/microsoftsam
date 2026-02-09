@@ -54,3 +54,24 @@ responses:
     - "How dare... I mean, go ahead."
     - "Hmph. You have my attention."
     - "The Zapper yields... for now."
+  
+  # When someone talks for a really long time (>15s) then stops
+  long_speech_ended:
+    - "At last! I thought you'd never shut up."
+    - "The Zapper has heard enough. Now it's MY turn."
+    - "Fascinating. Now hear ME out."
+    - "Your soliloquy pales in comparison to mine."
+  
+  # When the channel has been quiet for a while (>60s)
+  channel_quiet:
+    - "It's quiet... suspiciously quiet. Like the calm before a Zapp Brannigan victory."
+    - "The silence of my admirers is deafening."
+    - "Hello? Is anyone there to witness my greatness?"
+    - "This silence... it unsettles even the great Zapper."
+  
+  # When the LLM API is rate limited
+  rate_limited:
+    - "Even my magnificent brain needs a moment to cool down."
+    - "The tactical computer is... recalibrating."
+    - "My brilliance temporarily exceeds available bandwidth."
+    - "One moment. The Zapper is buffering his genius."

@@ -360,6 +360,9 @@ class SoulEvents:
         wake_word_detected: When wake word is heard.
         tool_started: When a tool starts executing.
         tool_completed: When a tool finishes.
+        long_speech_ended: When a user finishes a very long speech (>15s).
+        channel_quiet: When no one has spoken for a while (>60s).
+        rate_limited: When the LLM API returns a rate limit error (429).
     """
     user_first_speech: list[str] | None = field(default_factory=lambda: [
         "Hey {user}!",
@@ -382,6 +385,13 @@ class SoulEvents:
     wake_word_detected: list[str] | None = None  # e.g., "Yes?"
     tool_started: list[str] | None = None  # e.g., "Let me look that up..."
     tool_completed: list[str] | None = None  # e.g., "Found it!"
+    long_speech_ended: list[str] | None = None  # When user talks for >15s then stops
+    channel_quiet: list[str] | None = None  # When channel has been silent for >60s
+    rate_limited: list[str] | None = field(default_factory=lambda: [
+        "Hmm, I need a moment.",
+        "Give me a sec...",
+        "Hold on...",
+    ])
 
 
 @dataclass
