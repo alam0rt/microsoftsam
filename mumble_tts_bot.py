@@ -2498,10 +2498,6 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
         self.logger.info(f"[BOT-HEARD] {self.user} WILL respond (talks_to_bots=True)")
 
-        # Don't respond if we're currently speaking
-        if self._speaking.is_set():
-            return
-
         # Look up the speaker's Mumble session ID (treat bots as real users)
         user_id = self._get_session_id_by_name(speaker_name)
 
@@ -2510,27 +2506,45 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             self.logger.debug(f"Someone else responding to bot: {text[:30]}...")
             return
 
-        # The bot's message is ALREADY in the journal (from broadcast_utterance).
-        # We just need to generate a response - don't add anything to history.
-        self.logger.info(f'Generating response for {speaker_name}: "{text}"')
+        # Schedule response in a background thread that waits for speaker to finish
+        def _respond_after_speaker_done():
+            # Wait until all bots are done speaking (with timeout)
+            max_wait = 60  # seconds
+            poll_interval = 0.1  # seconds
+            waited = 0
+            while self._shared_services.any_bot_speaking() and waited < max_wait:
+                time.sleep(poll_interval)
+                waited += poll_interval
 
-        # Generate response directly - the journal already has the context
-        if self.llm:
-            # Set our system prompt on the shared LLM
-            if hasattr(self, '_bot_system_prompt') and self._bot_system_prompt:
-                self.llm.system_prompt = self._bot_system_prompt
+            # Don't respond if we started speaking while waiting
+            if self._speaking.is_set():
+                self.logger.info(f"[BOT-HEARD] {self.user} already speaking, skipping response")
+                return
 
-            # Build messages from journal (bot's message is already there)
-            messages = self._build_llm_messages()
+            # The bot's message is ALREADY in the journal (from broadcast_utterance).
+            # We just need to generate a response - don't add anything to history.
+            self.logger.info(f'Generating response for {speaker_name}: "{text}"')
 
-            # Generate response
-            response = self._run_coro_sync(
-                self.llm.chat(messages, bot_name=self.user)
-            )
+            # Generate response directly - the journal already has the context
+            if self.llm:
+                # Set our system prompt on the shared LLM
+                if hasattr(self, '_bot_system_prompt') and self._bot_system_prompt:
+                    self.llm.system_prompt = self._bot_system_prompt
 
-            if response.content:
-                # Speak the response (this will also broadcast it to other bots)
-                self._speak_sync(response.content)
+                # Build messages from journal (bot's message is already there)
+                messages = self._build_llm_messages()
+
+                # Generate response
+                response = self._run_coro_sync(
+                    self.llm.chat(messages, bot_name=self.user)
+                )
+
+                if response.content:
+                    # Speak the response (this will also broadcast it to other bots)
+                    self._speak_sync(response.content)
+
+        t = threading.Thread(target=_respond_after_speaker_done, daemon=True)
+        t.start()
 
     def _get_session_id_by_name(self, name: str) -> int:
         """Look up a user's Mumble session ID by their name.
@@ -2799,17 +2813,18 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         if self.echo_filter:
             self.echo_filter.add_output(text)
 
+        # Set speaking flags BEFORE broadcast so other bots know we're talking
+        # (they check any_bot_speaking() to avoid responding while we speak)
+        self._speaking.set()
+        self._shared_services.bot_started_speaking()
+
         # Broadcast utterance to other bots (they receive it as "fake ASR")
         # This lets bots hear each other without actual audio processing
         # SKIP broadcast for fillers/greetings that shouldn't trigger responses
         if not skip_broadcast:
             self._shared_services.broadcast_utterance(self.user, text)
         else:
-            self.logger.debug(f"[BROADCAST] Skipping broadcast for filler/event: '{text[:40]}...'")
-
-        self._speaking.set()
-        # Notify shared services that this bot started speaking (for barge-in suppression)
-        self._shared_services.bot_started_speaking()
+            self.logger.debug(f"[BROADCAST] Skipping broadcast for filler/event: '{text[:40]}...')")
 
         # Update conversation state machine
         if self.conversation_state_machine:
