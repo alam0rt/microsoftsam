@@ -204,15 +204,38 @@ class OpenAIChatLLM(LLMProvider):
 
         start_time = time.time()
 
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self.endpoint,
-                headers=headers,
-                json=body,
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-            data = response.json()
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    self.endpoint,
+                    headers=headers,
+                    json=body,
+                    timeout=self.timeout,
+                )
+                
+                # Log non-200 responses with full details before raising
+                if response.status_code != 200:
+                    try:
+                        error_body = response.text
+                    except Exception:
+                        error_body = "<unable to read response body>"
+                    logger.error(
+                        f"LLM API error: HTTP {response.status_code} from {self.endpoint}\n"
+                        f"Response headers: {dict(response.headers)}\n"
+                        f"Response body: {error_body[:2000]}"
+                    )
+                
+                response.raise_for_status()
+                data = response.json()
+        except httpx.HTTPStatusError as e:
+            # Already logged above, re-raise with context
+            raise
+        except httpx.TimeoutException as e:
+            logger.error(f"LLM request timeout after {self.timeout}s to {self.endpoint}: {e}")
+            raise
+        except httpx.RequestError as e:
+            logger.error(f"LLM request failed to {self.endpoint}: {e}", exc_info=True)
+            raise
 
         latency_ms = (time.time() - start_time) * 1000
 
@@ -312,17 +335,31 @@ class OpenAIChatLLM(LLMProvider):
         # Track if we're inside a <think> block (for models like Qwen3)
         in_think_block = False
 
-        async with httpx.AsyncClient() as client:
-            async with client.stream(
-                "POST",
-                self.endpoint,
-                headers=headers,
-                json=body,
-                timeout=self.timeout,
-            ) as response:
-                response.raise_for_status()
+        try:
+            async with httpx.AsyncClient() as client:
+                async with client.stream(
+                    "POST",
+                    self.endpoint,
+                    headers=headers,
+                    json=body,
+                    timeout=self.timeout,
+                ) as response:
+                    # Log non-200 responses with full details before raising
+                    if response.status_code != 200:
+                        try:
+                            error_body = await response.aread()
+                            error_body = error_body.decode('utf-8', errors='replace')
+                        except Exception:
+                            error_body = "<unable to read response body>"
+                        logger.error(
+                            f"LLM streaming API error: HTTP {response.status_code} from {self.endpoint}\n"
+                            f"Response headers: {dict(response.headers)}\n"
+                            f"Response body: {error_body[:2000]}"
+                        )
+                    
+                    response.raise_for_status()
 
-                async for line in response.aiter_lines():
+                    async for line in response.aiter_lines():
                     if not line or not line.startswith("data: "):
                         continue
 
@@ -365,6 +402,15 @@ class OpenAIChatLLM(LLMProvider):
 
                     except json.JSONDecodeError:
                         continue
+        except httpx.HTTPStatusError as e:
+            # Already logged above, re-raise
+            raise
+        except httpx.TimeoutException as e:
+            logger.error(f"LLM streaming request timeout after {self.timeout}s to {self.endpoint}: {e}")
+            raise
+        except httpx.RequestError as e:
+            logger.error(f"LLM streaming request failed to {self.endpoint}: {e}", exc_info=True)
+            raise
 
     async def is_available(self) -> bool:
         """Check if the LLM service is available.

@@ -390,12 +390,12 @@ class StreamingLuxTTS(LuxTTS):
                             return_smooth=return_smooth,
                         )
                     except Exception as retry_error:
-                        logger.warning(f"TTS retry failed after padding: {retry_error}")
+                        logger.error(f"TTS retry failed after padding: {retry_error}", exc_info=True)
                         return None
-            logger.warning(f"TTS error for '{text[:50]}': {e}")
+            logger.error(f"TTS error for '{text[:50]}': {e}", exc_info=True)
             return None
         except Exception as e:
-            logger.warning(f"TTS error for '{text[:50]}': {e}")
+            logger.error(f"TTS error for '{text[:50]}': {e}", exc_info=True)
             return None
 
 
@@ -679,8 +679,8 @@ class MumbleVoiceBot:
                 self.streaming_stt = SherpaNemotronASR(config)
                 # Try to initialize
                 if not self.streaming_stt.initialize():
-                    print("[Warning] Failed to initialize Sherpa Nemotron")
-                    print("[STT] Falling back to local Whisper")
+                    logger.error("Failed to initialize Sherpa Nemotron STT")
+                    logger.warning("[STT] Falling back to local Whisper")
                     self.streaming_stt = None
                     self.stt_provider = "local"
             else:
@@ -700,7 +700,7 @@ class MumbleVoiceBot:
                 # Pre-initialize Nemotron model so it's ready when we join Mumble
                 print("[STT] Pre-loading Nemotron model (this may take a moment)...")
                 if not asyncio.run(self.streaming_stt.initialize()):
-                    print("[Warning] Failed to pre-initialize Nemotron, will try again on first use")
+                    logger.warning("Failed to pre-initialize Nemotron, will try again on first use")
                 else:
                     print("[STT] Nemotron model ready!")
             else:
@@ -873,9 +873,9 @@ class MumbleVoiceBot:
         if config_file or os.path.exists("config.yaml"):
             try:
                 config = load_config(config_file)
-                print(f"[LLM] Loaded config from {config_file or 'config.yaml'}")
+                logger.info(f"Loaded LLM config from {config_file or 'config.yaml'}")
             except Exception as e:
-                print(f"[LLM] Config load failed: {e}")
+                logger.error(f"LLM config load failed: {e}", exc_info=True)
 
         # CLI args override config
         final_endpoint = endpoint
@@ -1860,7 +1860,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                     self._maybe_respond(user_id, user_name, force=True, tracker=tracker)
 
         except Exception as e:
-            print(f"[Error] Processing failed: {e}")
+            logger.error(f"Speech processing failed: {e}", exc_info=True)
 
     def _maybe_respond(self, user_id: int, user_name: str, force: bool = False, tracker: 'LatencyTracker' = None):
         """Respond if we have pending text and enough time has passed."""
@@ -2049,7 +2049,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
                 self._speak_sync(text, voice_prompt, pipeline_start, tracker)
             except Exception as e:
-                print(f"[TTS] Error: {e}")
+                logger.error(f"TTS worker error: {e}", exc_info=True)
             finally:
                 # task_done only exists on standard Queue, not BoundedTTSQueue
                 if hasattr(self._tts_queue, 'task_done'):
@@ -2312,7 +2312,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             if response:
                 self.speak(response)
         except Exception as e:
-            print(f"[Text] Error generating response: {e}")
+            logger.error(f"Text response generation failed: {e}", exc_info=True)
 
     def on_user_joined(self, user):
         """Handle user connect (legacy fallback - see PresenceHandler)."""
@@ -2339,7 +2339,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                     self._greet_user(user_name, user_session)
 
             except Exception as e:
-                print(f"[Event] Error handling user update: {e}")
+                logger.error(f"Error handling user update: {e}", exc_info=True)
 
     def on_user_left(self, user, message):
         """Handle user disconnect (legacy fallback - see PresenceHandler)."""
@@ -2402,7 +2402,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 if response:
                     self.speak(response)
             except Exception as e:
-                print(f"[Greet] Error generating greeting: {e}")
+                logger.error(f"Greeting generation failed: {e}", exc_info=True)
                 # Use themed fallback
                 self.speak(random.choice(fallback_greetings))
 
@@ -2442,7 +2442,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 channel.move_in()
                 print(f"[Mumble] Joined channel: {self.channel}")
             except Exception as e:
-                print(f"[Mumble] Failed to join channel: {e}")
+                logger.error(f"Failed to join channel '{self.channel}': {e}", exc_info=True)
 
     def run_forever(self):
         """Keep the bot running."""

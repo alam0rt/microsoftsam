@@ -83,6 +83,12 @@ class ConsoleFormatter(logging.Formatter):
         if context_parts:
             msg += f" ({', '.join(context_parts)})"
 
+        # Include exception traceback if present (for exc_info=True)
+        if record.exc_info:
+            exc_text = self.formatException(record.exc_info)
+            # Color the exception in red for visibility
+            msg += f"\n{color}{exc_text}{self.RESET}"
+
         return msg
 
 
