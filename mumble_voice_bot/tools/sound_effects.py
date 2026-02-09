@@ -15,6 +15,7 @@ entertaining - like a soundboard DJ in voice chat.
 import asyncio
 import hashlib
 import json
+import random
 import re
 import time
 import wave
@@ -95,10 +96,6 @@ class SoundEffectsTool(Tool):
         self._web_search_cache: dict[str, tuple[float, list[dict]]] = {}
         self._web_cache_ttl = 300  # 5 minutes
 
-        # Track recently played sounds to encourage variety
-        self._recently_played: list[str] = []
-        self._max_recent = 10  # Track last 10 sounds played
-
     @property
     def name(self) -> str:
         return "sound_effects"
@@ -113,15 +110,15 @@ class SoundEffectsTool(Tool):
         if self.auto_play:
             base += (
                 "BE PROACTIVE AND FUNNY! Play sounds to enhance the vibe:\n"
-                "- Someone says something sus? Play 'among us' sound\n"
-                "- Victory moment? Play a fanfare or airhorn\n"
-                "- Someone fails or something breaks? 'sad trombone' or 'bruh'\n"
-                "- Dramatic revelation? 'dun dun dun' or dramatic chipmunk\n"
-                "- Good news? 'hallelujah' or celebration sounds\n"
-                "- Awkward moment? 'crickets' or 'curb your enthusiasm'\n"
-                "Think like a funny soundboard operator - timing is everything!\n"
-                "IMPORTANT: Be creative and vary your sound choices! Don't repeat the same sounds. "
-                "Search for NEW and DIFFERENT sounds related to the context."
+                "BE CREATIVE with your search queries! Don't just use generic terms like 'fail' or 'success'.\n"
+                "Search for specific things related to what was said:\n"
+                "- Someone mentions a movie/show? Search for THAT movie's sounds\n"
+                "- Someone's name sounds like something? Search for that thing\n"
+                "- A topic comes up? Search for sounds related to THAT topic\n"
+                "- Use specific meme names, character names, show names, etc.\n"
+                "Examples: 'walter white', 'price is right fail', 'jeopardy think music',\n"
+                "'law and order', 'metal gear solid alert', 'windows xp', 'john cena'\n"
+                "The more specific and contextual, the funnier!"
             )
         return base
 
@@ -642,38 +639,25 @@ class SoundEffectsTool(Tool):
         metadata = index.get(query)
 
         if not metadata:
-            # Try local search - get multiple matches and prefer ones not recently played
+            # Try local search - get multiple and pick randomly for variety
             local_matches = self.search_sounds(query, limit=5)
             if local_matches:
-                # Prefer sounds not recently played
-                for match in local_matches:
-                    if match["title"] not in self._recently_played:
-                        sound_name = match["name"]
-                        metadata = index.get(sound_name)
-                        break
-                # If all are recent, just use the first match
-                if not metadata:
-                    sound_name = local_matches[0]["name"]
-                    metadata = index.get(sound_name)
+                chosen = random.choice(local_matches)
+                sound_name = chosen["name"]
+                metadata = index.get(sound_name)
+                logger.info(f"Picked '{chosen['title']}' from {len(local_matches)} local matches")
 
         # If not found locally and web search is enabled, search online
         if not metadata and search_web and self.enable_web_search:
             logger.info(f"Sound '{query}' not found locally, searching web...")
-            # Get multiple results to have variety
+            # Get multiple results and pick randomly for variety
             web_results = await self.search_myinstants(query, limit=5)
 
             if web_results:
-                # Prefer sounds not recently played
-                selected = None
-                for result in web_results:
-                    if result.get("title") not in self._recently_played:
-                        selected = result
-                        break
-                if not selected:
-                    selected = web_results[0]
-
-                # Download the selected result
-                filepath = await self.download_sound(selected)
+                # Pick a random result from the top matches
+                chosen = random.choice(web_results)
+                logger.info(f"Picked '{chosen.get('title')}' from {len(web_results)} web results")
+                filepath = await self.download_sound(chosen)
                 if filepath:
                     # Reload index and get the new sound
                     index = self._build_index()
@@ -694,15 +678,6 @@ class SoundEffectsTool(Tool):
 
         try:
             await self._play_callback(pcm_bytes, sample_rate)
-
-            # Track this sound as recently played
-            sound_title = metadata.get('title', query)
-            if sound_title in self._recently_played:
-                self._recently_played.remove(sound_title)
-            self._recently_played.append(sound_title)
-            if len(self._recently_played) > self._max_recent:
-                self._recently_played.pop(0)
-
             source = metadata.get("source", "local")
             source_info = f" (from {source})" if source != "local" else ""
             return f"*plays {metadata['title']}*{source_info}"
@@ -736,15 +711,10 @@ class SoundEffectsTool(Tool):
             lines = [f"Cached sounds ({len(index)} total):"]
             for sound in sounds:
                 source = f" [{sound.get('source', 'local')}]" if sound.get('source') != 'local' else ""
-                title = sound['title']
-                recent_mark = " (recent)" if title in self._recently_played else ""
-                lines.append(f"- {title}{source}{recent_mark}")
+                lines.append(f"- {sound['title']}{source}")
 
             if len(index) > limit:
                 lines.append(f"... and {len(index) - limit} more.")
-
-            if self._recently_played:
-                lines.append(f"\nRecently played: {', '.join(self._recently_played[-5:])}. Try something different!")
 
             return "\n".join(lines)
 
@@ -771,12 +741,9 @@ class SoundEffectsTool(Tool):
             lines = [f"Sounds matching '{query}':"]
             for sound in results[:limit]:
                 source = f" [{sound.get('source', 'local')}]"
-                title = sound['title']
-                # Mark recently played sounds
-                recent_mark = " (played recently - try something different!)" if title in self._recently_played else ""
-                lines.append(f"- {title}{source}{recent_mark}")
+                lines.append(f"- {sound['title']}{source}")
 
-            lines.append("\nPick one you haven't played recently! Call sound_effects(action='play', query='<exact title>') to play.")
+            lines.append("\nNow call sound_effects(action='play', query='<exact title>') to play one!")
             return "\n".join(lines)
 
         elif action == "web_search":
