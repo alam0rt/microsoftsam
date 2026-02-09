@@ -3,6 +3,7 @@
 
 personas:
   - name: parrot
+    display_name: "Parrot"
     mumble:
       user: "Parrot"
       channel: null  # Join root/default channel
