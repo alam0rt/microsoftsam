@@ -530,6 +530,75 @@ def load_soul_config(
     )
 
 
+class ConfigValidationError(Exception):
+    """Raised when config validation fails."""
+    pass
+
+
+def _get_dataclass_fields(cls) -> set[str]:
+    """Get the field names of a dataclass."""
+    from dataclasses import fields as dataclass_fields
+    return {f.name for f in dataclass_fields(cls)}
+
+
+def validate_config_section(section_name: str, data: dict, config_class) -> list[str]:
+    """Validate a config section against its dataclass.
+
+    Args:
+        section_name: Name of the section (for error messages).
+        data: The config data dict.
+        config_class: The dataclass to validate against.
+
+    Returns:
+        List of error messages (empty if valid).
+    """
+    errors = []
+    valid_fields = _get_dataclass_fields(config_class)
+    for key in data.keys():
+        if key not in valid_fields:
+            errors.append(f"Unknown field '{key}' in {section_name}. Valid fields: {sorted(valid_fields)}")
+    return errors
+
+
+def validate_config_data(config_data: dict, path: str | Path) -> None:
+    """Validate config data and raise ConfigValidationError if invalid.
+
+    Args:
+        config_data: The parsed config dict.
+        path: Path to the config file (for error messages).
+
+    Raises:
+        ConfigValidationError: If any validation errors are found.
+    """
+    errors = []
+
+    # Known top-level sections
+    valid_sections = {"llm", "tts", "stt", "mumble", "bot", "models", "tools", "soul"}
+    for key in config_data.keys():
+        if key not in valid_sections:
+            errors.append(f"Unknown top-level section '{key}'. Valid sections: {sorted(valid_sections)}")
+
+    # Validate each section
+    section_mapping = {
+        "llm": LLMConfig,
+        "tts": TTSConfig,
+        "stt": STTConfig,
+        "mumble": MumbleConfig,
+        "bot": PipelineBotConfig,
+        "models": ModelsConfig,
+        "tools": ToolsConfig,
+    }
+
+    for section_name, config_class in section_mapping.items():
+        section_data = config_data.get(section_name, {})
+        if section_data:
+            errors.extend(validate_config_section(section_name, section_data, config_class))
+
+    if errors:
+        error_msg = f"Config validation failed for {path}:\n  - " + "\n  - ".join(errors)
+        raise ConfigValidationError(error_msg)
+
+
 def load_config(path: str | Path | None = None) -> BotConfig:
     """Load configuration from a YAML file.
 
@@ -560,6 +629,9 @@ def load_config(path: str | Path | None = None) -> BotConfig:
 
     # Expand environment variables
     config_data = _expand_env_vars(raw_config)
+
+    # Validate config structure before building objects
+    validate_config_data(config_data, path)
 
     # Build config objects
     llm_data = config_data.get("llm", {})

@@ -52,11 +52,12 @@ logger = get_logger(__name__)
 
 # Import LLM components
 try:
-    from mumble_voice_bot.config import load_config
+    from mumble_voice_bot.config import load_config, ConfigValidationError
     from mumble_voice_bot.providers.openai_llm import OpenAIChatLLM
     LLM_AVAILABLE = True
 except ImportError as e:
     LLM_AVAILABLE = False
+    ConfigValidationError = Exception  # Fallback
     logger.warning(f"LLM modules not available: {e}")
 
 # Import Wyoming STT provider
@@ -2538,8 +2539,14 @@ def main():
         try:
             config = load_config(args.config)
             logger.info(f"Config loaded from {args.config}")
+        except ConfigValidationError as e:
+            logger.error(f"Config validation failed: {e}")
+            print(f"\n❌ Config validation failed:\n{e}", file=sys.stderr)
+            sys.exit(1)
         except Exception as e:
             logger.error(f"Error loading {args.config}: {e}")
+            print(f"\n❌ Error loading {args.config}: {e}", file=sys.stderr)
+            sys.exit(1)
 
     # Apply model storage paths early, before loading any models
     # CLI --hf-home overrides config

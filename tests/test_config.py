@@ -15,6 +15,7 @@ import pytest
 
 from mumble_voice_bot.config import (
     BotConfig,
+    ConfigValidationError,
     LLMConfig,
     ModelsConfig,
     MumbleConfig,
@@ -29,6 +30,7 @@ from mumble_voice_bot.config import (
     create_example_config,
     load_config,
     load_soul_config,
+    validate_config_section,
 )
 
 # --- Fixtures ---
@@ -644,3 +646,98 @@ class TestStreamingPipelineConfig:
         assert config.enabled is True
         assert config.llm_start_threshold == 30
         assert config.phrase_min_chars == 20
+
+
+class TestConfigValidation:
+    """Test configuration validation."""
+
+    def test_validate_config_section_valid(self):
+        """Test validation passes for valid config."""
+        data = {"endpoint": "http://localhost", "model": "test"}
+        errors = validate_config_section("llm", data, LLMConfig)
+        assert errors == []
+
+    def test_validate_config_section_unknown_field(self):
+        """Test validation catches unknown fields."""
+        data = {"endpoint": "http://localhost", "unknown_field": "value"}
+        errors = validate_config_section("llm", data, LLMConfig)
+        assert len(errors) == 1
+        assert "unknown_field" in errors[0].lower()
+
+    def test_validate_config_section_typo(self):
+        """Test validation catches typos in field names."""
+        # Common typo: decay_seconds instead of decay
+        data = {"echo_filter_decay_seconds": 30.0}
+        errors = validate_config_section("bot", data, PipelineBotConfig)
+        assert len(errors) == 1
+        assert "echo_filter_decay_seconds" in errors[0]
+
+    def test_load_config_with_unknown_field_raises(self, temp_config_dir):
+        """Test loading config with unknown field raises ConfigValidationError."""
+        config_content = """
+llm:
+  endpoint: "http://localhost"
+  unknown_option: "value"
+"""
+        config_path = temp_config_dir / "config.yaml"
+        config_path.write_text(config_content)
+
+        with pytest.raises(ConfigValidationError) as exc_info:
+            load_config(config_path)
+
+        assert "unknown_option" in str(exc_info.value).lower()
+
+    def test_load_config_with_typo_in_bot_section_raises(self, temp_config_dir):
+        """Test config validation catches typos in bot section."""
+        config_content = """
+bot:
+  echo_filter_decay_seconds: 30.0
+"""
+        config_path = temp_config_dir / "config.yaml"
+        config_path.write_text(config_content)
+
+        with pytest.raises(ConfigValidationError) as exc_info:
+            load_config(config_path)
+
+        assert "echo_filter_decay_seconds" in str(exc_info.value)
+        # Should suggest valid field
+        assert "echo_filter_decay" in str(exc_info.value)
+
+    def test_load_config_with_unknown_section_raises(self, temp_config_dir):
+        """Test config validation catches unknown top-level sections."""
+        config_content = """
+llm:
+  endpoint: "http://localhost"
+
+unknown_section:
+  foo: bar
+"""
+        config_path = temp_config_dir / "config.yaml"
+        config_path.write_text(config_content)
+
+        with pytest.raises(ConfigValidationError) as exc_info:
+            load_config(config_path)
+
+        assert "unknown_section" in str(exc_info.value).lower()
+
+    def test_load_config_valid_passes(self, basic_config_yaml):
+        """Test valid config passes validation."""
+        # Should not raise
+        config = load_config(basic_config_yaml)
+        assert config.llm.endpoint == "http://localhost:8080/v1/chat/completions"
+
+    def test_validation_error_shows_valid_fields(self, temp_config_dir):
+        """Test error message includes list of valid fields."""
+        config_content = """
+tts:
+  bad_field: "value"
+"""
+        config_path = temp_config_dir / "config.yaml"
+        config_path.write_text(config_content)
+
+        with pytest.raises(ConfigValidationError) as exc_info:
+            load_config(config_path)
+
+        error_msg = str(exc_info.value)
+        # Should mention valid fields
+        assert "ref_audio" in error_msg or "Valid fields" in error_msg
