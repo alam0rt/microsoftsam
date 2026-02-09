@@ -740,6 +740,9 @@ class MumbleVoiceBot:
         self.tools_config = tools_config  # Tool-specific configuration
         self._current_soul_name = soul_name  # Track active soul name for tool queries
 
+        # Per-bot logger with username context
+        self.logger = get_logger(f"{__name__}.{user}")
+
         # VAD settings
         self.asr_threshold = asr_threshold
         self.debug_rms = debug_rms
@@ -1871,7 +1874,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 barge_in_threshold = self.asr_threshold * 3  # Much higher threshold for barge-in
                 if self.turn_controller and rms > barge_in_threshold:
                     if self.turn_controller.request_barge_in():
-                        logger.info(f"Barge-in triggered by {user_name} (RMS={rms} > {barge_in_threshold})")
+                        self.logger.info(f"Barge-in triggered by {user_name} (RMS={rms} > {barge_in_threshold})")
             return  # Don't buffer audio while speaking
 
         rms = pcm_rms(sound_chunk.pcm)
@@ -1882,7 +1885,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             self._audio_senders = {}
         if user_id not in self._audio_senders:
             self._audio_senders[user_id] = user_name
-            logger.info(f"First audio from {user_name} (session={user_id}, RMS={rms})")
+            self.logger.info(f"First audio from {user_name} (session={user_id}, RMS={rms})")
 
         # Debug display
         if self.debug_rms:
@@ -1991,7 +1994,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             audio_16k = np.clip(audio_16k, -1.0, 1.0).astype(np.float32)
 
         # Transcribe
-        logger.debug(f"ASR transcribing {buffer_duration:.1f}s", extra={"user": user_name, "duration_ms": buffer_duration * 1000})
+        self.logger.debug(f"ASR transcribing {buffer_duration:.1f}s", extra={"user": user_name, "duration_ms": buffer_duration * 1000})
         start_time = time.time()
 
         # Mark ASR start in tracker
@@ -2044,20 +2047,20 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 return
 
             # Log the full transcription with timing
-            logger.info(f'ASR ({transcribe_time*1000:.0f}ms): "{text}" [from {user_name}, {buffer_duration:.1f}s audio]')
+            self.logger.info(f'ASR ({transcribe_time*1000:.0f}ms): "{text}" [from {user_name}, {buffer_duration:.1f}s audio]')
             if transcribe_time > 2.0:
-                logger.warning(f"ASR slow: {transcribe_time*1000:.0f}ms (>2s)")
+                self.logger.warning(f"ASR slow: {transcribe_time*1000:.0f}ms (>2s)")
 
             # --- Speech Filtering ---
 
             # Echo filter: check if this is the bot's own speech being picked up
             if self.echo_filter and self.echo_filter.is_echo(text):
-                logger.debug(f"Echo filter: ignoring '{text}' (matches recent bot output)")
+                self.logger.debug(f"Echo filter: ignoring '{text}' (matches recent bot output)")
                 return
 
             # Utterance classifier: check if this is meaningful speech
             if self.utterance_classifier and not self.utterance_classifier.is_meaningful(text):
-                logger.debug(f"Utterance filter: ignoring '{text}' (not meaningful)")
+                self.logger.debug(f"Utterance filter: ignoring '{text}' (not meaningful)")
                 return
 
             # --- End Speech Filtering ---
@@ -2131,7 +2134,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 if tracker:
                     tracker.llm_start()
 
-                logger.info(f'Generating response for {user_name}: "{text}"')
+                self.logger.info(f'Generating response for {user_name}: "{text}"')
                 llm_start = time.time()
 
                 try:
@@ -2148,23 +2151,23 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                     # Check for staleness via turn ID (preferred) or pending_text (fallback)
                     if self._turn_coordinator and turn_id:
                         if self._turn_coordinator.is_stale(str(user_id), turn_id):
-                            logger.info("Pipeline abort: turn is stale (user started new turn)")
+                            self.logger.info("Pipeline abort: turn is stale (user started new turn)")
                             return
                     elif user_id in self.pending_text:
-                        logger.info("Pipeline abort: user spoke again", extra={"latency_ms": llm_time * 1000})
+                        self.logger.info("Pipeline abort: user spoke again", extra={"latency_ms": llm_time * 1000})
                         return
 
                     # Check if cancelled by barge-in
                     if self.turn_controller and self.turn_controller.is_cancelled():
-                        logger.info("Pipeline abort: barge-in")
+                        self.logger.info("Pipeline abort: barge-in")
                         return
 
                     # Check total latency - if too slow, warn
                     total_latency = time.time() - speech_end_time
                     if total_latency > 3.0:
-                        logger.warning(f"High latency: {total_latency:.1f}s since user stopped", extra={"latency_ms": total_latency * 1000})
+                        self.logger.warning(f"High latency: {total_latency:.1f}s since user stopped", extra={"latency_ms": total_latency * 1000})
 
-                    logger.info(f'Queuing TTS: "{response}" (LLM took {llm_time*1000:.0f}ms)')
+                    self.logger.info(f'Queuing TTS: "{response}" (LLM took {llm_time*1000:.0f}ms)')
 
                     # Queue TTS with timing metadata, tracker, and turn ID
                     self._queue_tts(response, self.voice_prompt, pipeline_start, user_id, tracker, turn_id)
@@ -2186,7 +2189,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         # Sanitize text: remove emojis and non-speakable characters
         text = _sanitize_for_tts(text)
         if not text.strip():
-            logger.warning("TTS text empty after sanitization, skipping")
+            self.logger.warning("TTS text empty after sanitization, skipping")
             return
 
         if PERF_AVAILABLE and turn_id is not None:
@@ -2212,7 +2215,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
     def _tts_worker(self):
         """Background worker for TTS."""
-        logger.info("TTS worker started")
+        self.logger.info("TTS worker started")
         while not self._shutdown.is_set():
             try:
                 item = self._tts_queue.get(timeout=0.5)
@@ -2244,14 +2247,14 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                     pipeline_start = None
                     user_id = None
             else:
-                logger.warning(f"Unknown TTS queue item type: {type(item)}")
+                self.logger.warning(f"Unknown TTS queue item type: {type(item)}")
                 continue
 
             try:
                 # Check staleness via turn ID (preferred) or pending_text (fallback)
                 if self._turn_coordinator and turn_id is not None and user_id is not None:
                     if self._turn_coordinator.is_stale(str(user_id), turn_id):
-                        logger.info("[TTS] Skipping stale response - turn superseded")
+                        self.logger.info("[TTS] Skipping stale response - turn superseded")
                         continue
                 elif user_id is not None and user_id in self.pending_text:
                     print("[TTS] Skipping stale response - user spoke again")
@@ -2272,7 +2275,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
                 self._speak_sync(text, voice_prompt, pipeline_start, tracker)
             except Exception as e:
-                logger.error(f"TTS worker error: {e}", exc_info=True)
+                self.logger.error(f"TTS worker error: {e}", exc_info=True)
             finally:
                 # task_done only exists on standard Queue, not BoundedTTSQueue
                 if hasattr(self._tts_queue, 'task_done'):
@@ -2381,7 +2384,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
             if pipeline_start:
                 pipeline_total = time.time() - pipeline_start
-                logger.info(f"TTS complete: {tts_total*1000:.0f}ms synthesis, {audio_duration_ms:.0f}ms audio, pipeline total: {pipeline_total*1000:.0f}ms")
+                self.logger.info(f"TTS complete: {tts_total*1000:.0f}ms synthesis, {audio_duration_ms:.0f}ms audio, pipeline total: {pipeline_total*1000:.0f}ms")
 
         finally:
             # Brief delay after synthesis before clearing _speaking flag
