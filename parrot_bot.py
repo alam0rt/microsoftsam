@@ -160,7 +160,7 @@ class ParrotBot:
         self._max_rms = 0
 
     def start(self):
-        """Connect to Mumble server."""
+        """Connect to Mumble server and start worker threads."""
         self.logger.info(f"Connecting to {self.host}:{self.port} as {self.user}...")
         
         self.mumble = pymumble.Mumble(
@@ -192,18 +192,19 @@ class ParrotBot:
             except Exception as e:
                 self.logger.warning(f"Failed to join channel '{self.channel}': {e}")
         
+        # Start TTS playback thread (needed for both standalone and multi-persona mode)
+        self._tts_thread = threading.Thread(target=self._tts_worker, daemon=True, name="ParrotTTS")
+        self._tts_thread.start()
+        
+        # Start silence checker thread
+        self._silence_thread = threading.Thread(target=self._silence_checker, daemon=True, name="ParrotSilence")
+        self._silence_thread.start()
+        
         self.logger.info(f"Connected! Listening for speech...")
 
     def run_forever(self):
-        """Run the bot until interrupted."""
-        # Start TTS playback thread
-        tts_thread = threading.Thread(target=self._tts_worker, daemon=True)
-        tts_thread.start()
-        
-        # Start silence checker thread
-        silence_thread = threading.Thread(target=self._silence_checker, daemon=True)
-        silence_thread.start()
-        
+        """Run the bot until interrupted (for standalone mode)."""
+        # Threads already started in start()
         try:
             while not self._shutdown.is_set():
                 time.sleep(0.1)
