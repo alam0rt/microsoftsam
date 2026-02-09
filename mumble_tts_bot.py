@@ -1974,15 +1974,16 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
     def _add_to_history(self, user_id: int, role: str, content: str, user_name: str = None):
         """Add a message to conversation history via the shared journal.
 
-        This is the single entry point for adding messages to context.
-        Always logs to the shared journal (the unified source of truth).
+        This is the single entry point for adding USER messages to context.
+        Bot (assistant) messages are logged via broadcast_utterance() instead,
+        to avoid double-logging.
         """
         if role == "user":
             self._shared_services.log_event("user_message", user_name, content)
-        elif role == "assistant":
-            self._shared_services.log_event("bot_message", self.user, content)
+        # NOTE: Don't log assistant messages here - they get logged in broadcast_utterance()
+        # to avoid duplication in the journal
 
-    async def _generate_response(self, user_id: int, text: str, user_name: str = None) -> str:
+    async def _generate_response(self, user_id: int, text: str, user_name: str = None, skip_history_add: bool = False) -> str:
         """Generate LLM response, executing any tool calls.
 
         This method implements a tool execution loop:
@@ -1991,16 +1992,25 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         3. If LLM returns tool calls, execute them
         4. Send tool results back to LLM
         5. Repeat until LLM returns a text response (max 5 iterations)
+        
+        Args:
+            user_id: User session ID
+            text: The message text to respond to
+            user_name: Name of the speaker
+            skip_history_add: If True, don't add the incoming message to history
+                             (used when responding to bot utterances that are already logged)
         """
         # Check for keyword-based tool triggers first
         # This helps with models that don't reliably use tool calling
         keyword_result = await self._check_keyword_tools(text)
         if keyword_result:
-            self._add_to_history(user_id, "user", text, user_name)
+            if not skip_history_add:
+                self._add_to_history(user_id, "user", text, user_name)
             self._add_to_history(user_id, "assistant", keyword_result)
             return keyword_result
 
-        self._add_to_history(user_id, "user", text, user_name)
+        if not skip_history_add:
+            self._add_to_history(user_id, "user", text, user_name)
 
         # Build messages for LLM
         messages = self._get_history(user_id)
@@ -2087,9 +2097,9 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         logger.warning(f"Tool loop hit max iterations ({max_iterations})")
         return "Sorry, I got stuck in a loop trying to look that up."
 
-    def _generate_response_sync(self, user_id: int, text: str, user_name: str = None) -> str:
+    def _generate_response_sync(self, user_id: int, text: str, user_name: str = None, skip_history_add: bool = False) -> str:
         """Generate LLM response synchronously."""
-        return self._run_coro_sync(self._generate_response(user_id, text, user_name))
+        return self._run_coro_sync(self._generate_response(user_id, text, user_name, skip_history_add))
 
     def _generate_oneoff_response_sync(self, prompt: str) -> str:
         """Generate a one-off LLM response without updating history."""
