@@ -545,7 +545,7 @@ class MumbleVoiceBot:
 
         # Conversation state - SHARED channel history (not per-user)
         self.channel_history = []  # List of {"role": str, "content": str, "speaker": str, "time": float}
-        self.channel_history_max = 30  # Keep last 30 messages
+        self.channel_history_max = config.llm.context_messages  # Configurable short-term memory
         self.conversation_timeout = 300.0  # 5 minutes - clear history after inactivity
         self.last_activity_time = time.time()
 
@@ -855,6 +855,8 @@ class MumbleVoiceBot:
         final_top_p = None
         final_top_k = None
         final_repetition_penalty = None
+        final_frequency_penalty = None
+        final_presence_penalty = None
 
         if config:
             final_endpoint = final_endpoint or config.llm.endpoint
@@ -869,6 +871,8 @@ class MumbleVoiceBot:
             final_top_p = config.llm.top_p
             final_top_k = config.llm.top_k
             final_repetition_penalty = config.llm.repetition_penalty
+            final_frequency_penalty = config.llm.frequency_penalty
+            final_presence_penalty = config.llm.presence_penalty
             if hasattr(config, 'bot') and config.bot.conversation_timeout:
                 self.conversation_timeout = config.bot.conversation_timeout
 
@@ -893,6 +897,8 @@ class MumbleVoiceBot:
             top_p=final_top_p,
             top_k=final_top_k,
             repetition_penalty=final_repetition_penalty,
+            frequency_penalty=final_frequency_penalty,
+            presence_penalty=final_presence_penalty,
         )
         extra_info = []
         if final_max_tokens:
@@ -905,6 +911,10 @@ class MumbleVoiceBot:
             extra_info.append(f"top_k={final_top_k}")
         if final_repetition_penalty:
             extra_info.append(f"rep_penalty={final_repetition_penalty}")
+        if final_frequency_penalty:
+            extra_info.append(f"freq_penalty={final_frequency_penalty}")
+        if final_presence_penalty:
+            extra_info.append(f"pres_penalty={final_presence_penalty}")
         extra_str = f" ({', '.join(extra_info)})" if extra_info else ""
         print(f"[LLM] Initialized: {final_model} @ {final_endpoint}{extra_str}")
 

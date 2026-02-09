@@ -60,6 +60,8 @@ class OpenAIChatLLM(LLMProvider):
         top_p: float | None = None,
         top_k: int | None = None,
         repetition_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+        presence_penalty: float | None = None,
     ):
         """Initialize the OpenAI-compatible LLM provider.
 
@@ -87,6 +89,8 @@ class OpenAIChatLLM(LLMProvider):
         self.top_p = top_p
         self.top_k = top_k
         self.repetition_penalty = repetition_penalty
+        self.frequency_penalty = frequency_penalty
+        self.presence_penalty = presence_penalty
         
         # Get the appropriate tool formatter for this model
         self._tool_formatter = get_tool_formatter(model)
@@ -152,6 +156,12 @@ class OpenAIChatLLM(LLMProvider):
 
         if self.repetition_penalty is not None:
             body["repetition_penalty"] = self.repetition_penalty
+
+        if self.frequency_penalty is not None:
+            body["frequency_penalty"] = self.frequency_penalty
+
+        if self.presence_penalty is not None:
+            body["presence_penalty"] = self.presence_penalty
 
         # Add tools as API parameter only for OpenAI-compatible models
         if tools and self._is_openai_tools:

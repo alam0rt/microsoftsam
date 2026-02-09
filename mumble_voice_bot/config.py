@@ -60,6 +60,9 @@ class LLMConfig:
         top_p: Nucleus sampling parameter (optional).
         top_k: Top-k sampling parameter (optional).
         repetition_penalty: Penalty for repetition (optional).
+        frequency_penalty: Penalty for token frequency (optional, OpenAI-style).
+        presence_penalty: Penalty for token presence (optional, OpenAI-style).
+        context_messages: Max messages to keep in conversation history.
     """
     endpoint: str = "http://localhost:11434/v1/chat/completions"
     model: str = "llama3.2:3b"
@@ -77,6 +80,9 @@ class LLMConfig:
     top_p: float | None = None
     top_k: int | None = None
     repetition_penalty: float | None = None
+    frequency_penalty: float | None = None
+    presence_penalty: float | None = None
+    context_messages: int = 20
 
 
 @dataclass
