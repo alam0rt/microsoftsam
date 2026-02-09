@@ -332,6 +332,14 @@ class TextCommandHandler(MumbleEventHandler):
             logger.debug("LLM not available - ignoring text message")
             return
 
+        # Only one responder should reply to each message (natural turn-taking)
+        if hasattr(self._bot, '_shared_services') and self._bot._shared_services:
+            if not self._bot._shared_services.try_claim_response(
+                event.sender_session_id, text
+            ):
+                logger.debug(f"Someone else responding to text: {text[:30]}...")
+                return
+
         try:
             response = self._bot._generate_response_sync(
                 event.sender_session_id,

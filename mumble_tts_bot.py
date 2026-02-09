@@ -526,6 +526,46 @@ class SharedBotServices:
         # Counter for how many bots are currently speaking (for barge-in suppression)
         self._speaking_count = 0
         self._speaking_lock = threading.Lock()
+        # Response claim tracking - prevents multiple responders to same utterance
+        # Maps (user_id, text_hash) -> timestamp when claimed
+        # This is like "someone already started responding to this" - no bot identity tracked
+        self._response_claims: dict[tuple, float] = {}
+        self._claims_lock = threading.Lock()
+        self._claim_expiry = 10.0  # Claims expire after 10 seconds
+
+    def try_claim_response(self, user_id: int, text: str) -> bool:
+        """Try to claim the right to respond to a user utterance.
+
+        Prevents multiple responders from piling on to the same utterance.
+        This is like natural turn-taking - if someone starts responding,
+        others yield. The bot doesn't know WHO claimed it, just that
+        someone did.
+
+        Args:
+            user_id: The user who spoke.
+            text: The transcribed text (used with user_id as key).
+
+        Returns:
+            True if we can respond, False if someone already started responding.
+        """
+        import time
+        now = time.time()
+        # Use first 50 chars of text to create a reasonable key
+        text_key = text[:50] if text else ""
+        claim_key = (user_id, text_key)
+
+        with self._claims_lock:
+            # Clean expired claims
+            expired = [k for k, v in self._response_claims.items() if now - v > self._claim_expiry]
+            for k in expired:
+                del self._response_claims[k]
+
+            if claim_key in self._response_claims:
+                # Already claimed by someone - yield
+                return False
+            # Claim it (just record timestamp, not who)
+            self._response_claims[claim_key] = now
+            return True
 
     def bot_started_speaking(self) -> None:
         """Called when a bot starts speaking."""
@@ -2182,6 +2222,13 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 # Mark LLM start in tracker
                 if tracker:
                     tracker.llm_start()
+
+                # In multi-bot mode, try to claim this response
+                # Only one responder should reply to each utterance (natural turn-taking)
+                if self._shared_services:
+                    if not self._shared_services.try_claim_response(user_id, text):
+                        self.logger.debug(f"Someone else responding to: {text[:30]}...")
+                        return
 
                 self.logger.info(f'Generating response for {user_name}: "{text}"')
                 llm_start = time.time()
