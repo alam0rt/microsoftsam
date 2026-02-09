@@ -8,14 +8,12 @@ Tests cover:
 - DuckDuckGo HTML parsing
 """
 
-import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
 from mumble_voice_bot.tools.web_search import WebSearchTool
-
 
 # --- Fixtures ---
 
@@ -68,7 +66,7 @@ class TestWebSearchToolDefinition:
     def test_tool_parameters(self, web_search_tool):
         """Test tool parameters schema."""
         params = web_search_tool.parameters
-        
+
         assert params["type"] == "object"
         assert "query" in params["properties"]
         assert "count" in params["properties"]
@@ -79,7 +77,7 @@ class TestWebSearchToolDefinition:
     def test_to_schema(self, web_search_tool):
         """Test full schema generation."""
         schema = web_search_tool.to_schema()
-        
+
         assert schema["type"] == "function"
         assert schema["function"]["name"] == "web_search"
         assert "parameters" in schema["function"]
@@ -120,7 +118,7 @@ class TestWebSearchToolExecution:
 
             # Should have at most 2 numbered results
             lines = result.split("\n")
-            numbered_lines = [l for l in lines if l.strip().startswith(("1.", "2.", "3."))]
+            numbered_lines = [line for line in lines if line.strip().startswith(("1.", "2.", "3."))]
             assert len(numbered_lines) <= 2
 
     @pytest.mark.asyncio

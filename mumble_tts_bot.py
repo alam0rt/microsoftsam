@@ -119,9 +119,9 @@ except ImportError as e:
 # Import tool system
 try:
     from mumble_voice_bot.tools import ToolRegistry
-    from mumble_voice_bot.tools.web_search import WebSearchTool
     from mumble_voice_bot.tools.souls import SoulsTool
     from mumble_voice_bot.tools.sound_effects import SoundEffectsTool
+    from mumble_voice_bot.tools.web_search import WebSearchTool
     TOOLS_AVAILABLE = True
 except ImportError as e:
     TOOLS_AVAILABLE = False
@@ -209,12 +209,19 @@ def _pad_tts_text(text: str, min_chars: int = 20, min_words: int = 4) -> str:
 
 def _sanitize_for_tts(text: str) -> str:
     """Remove emojis and non-speakable characters from text for TTS.
-    
-    Strips: emojis, asterisks, dashes used for formatting, etc.
+
+    Strips: emojis, asterisks, dashes used for formatting, timestamps, self-identification, etc.
     Keeps: letters, numbers, basic punctuation (.,!?'), spaces.
     """
     import re
-    
+
+    # Remove timestamp prefixes like "[11:40 AM]" or "[2:30 PM]" at the start
+    text = re.sub(r'^\s*\[\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?\]\s*', '', text)
+
+    # Remove self-identification prefixes like "Raf:" or "Bot:" at the start
+    # This handles when the LLM outputs its own name as a prefix
+    text = re.sub(r'^[A-Za-z]+:\s*', '', text)
+
     # Remove emojis (Unicode emoji ranges)
     emoji_pattern = re.compile(
         "["
@@ -231,24 +238,24 @@ def _sanitize_for_tts(text: str) -> str:
         flags=re.UNICODE
     )
     text = emoji_pattern.sub("", text)
-    
+
     # Remove emoji modifiers, joiners, and variation selectors that may be left behind
     # after removing complex emojis (e.g., 🕵️‍♂️ leaves \u200d and \ufe0f)
     text = re.sub(r'[\u200d\ufe0e\ufe0f]', '', text)  # ZWJ and variation selectors
-    
+
     # Remove formatting characters: *, _, ~, `, #, |, <, >, [], {}
     text = re.sub(r'[\*_~`#|<>\[\]{}]', '', text)
-    
+
     # Replace em-dash and en-dash with space
     text = re.sub(r'[—–]', ' ', text)  # em-dash (—) and en-dash (–)
-    
+
     # Replace multiple dashes with single dash, then remove standalone dashes
     text = re.sub(r'-{2,}', ' ', text)  # -- or --- to space
     text = re.sub(r'\s-\s', ' ', text)  # " - " to space
-    
+
     # Clean up multiple spaces
     text = re.sub(r'\s+', ' ', text).strip()
-    
+
     return text
 
 
@@ -1042,14 +1049,14 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
     async def _play_sound_effect(self, pcm_bytes: bytes, sample_rate: int) -> None:
         """Play a sound effect through Mumble.
-        
+
         Args:
             pcm_bytes: Raw PCM audio data (16-bit, mono).
             sample_rate: Sample rate of the audio.
         """
         if not hasattr(self, 'mumble') or not self.mumble:
             raise RuntimeError("Mumble not initialized")
-        
+
         # Convert sample rate if needed (Mumble expects 48kHz)
         if sample_rate != 48000:
             import numpy as np
@@ -1058,33 +1065,33 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             indices = np.linspace(0, len(pcm_array) - 1, num_samples)
             pcm_array = np.interp(indices, np.arange(len(pcm_array)), pcm_array)
             pcm_bytes = pcm_array.astype(np.int16).tobytes()
-        
+
         # Add sound to Mumble output
         self.mumble.sound_output.add_sound(pcm_bytes)
 
     async def _check_keyword_tools(self, text: str) -> str | None:
         """Check for keyword-based tool triggers.
-        
+
         This is a fallback for models that don't reliably generate tool calls.
         Returns a response string if a tool was triggered, None otherwise.
         """
         if not self.tools:
             return None
-            
+
         text_lower = text.lower()
-        
+
         # Soul switching keywords
         switch_patterns = [
             "switch to the", "switch to", "change to the", "change to",
             "use the", "be the", "become the", "switch soul to",
         ]
-        
+
         for pattern in switch_patterns:
             if pattern in text_lower:
                 # Extract what comes after the pattern
                 idx = text_lower.find(pattern) + len(pattern)
                 remainder = text_lower[idx:].strip()
-                
+
                 # Look for soul name - common patterns like "raf soul", "raf", "raf personality"
                 soul_name = remainder.split()[0] if remainder.split() else None
                 if soul_name:
@@ -1093,7 +1100,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                     for suffix in ["soul", "personality", "voice", "character"]:
                         if soul_name.endswith(suffix):
                             soul_name = soul_name[:-len(suffix)].strip()
-                    
+
                     if soul_name:
                         logger.info(f"Keyword trigger: switching to soul '{soul_name}'")
                         result = await self.tools.execute("souls", {
@@ -1101,13 +1108,13 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                             "soul_name": soul_name
                         })
                         return f"Switching to {soul_name}. {result}"
-        
+
         # List souls keywords
         if any(phrase in text_lower for phrase in ["list souls", "what souls", "available souls", "show souls"]):
             logger.info("Keyword trigger: listing souls")
             result = await self.tools.execute("souls", {"action": "list"})
             return f"Here are the available souls: {result}"
-        
+
         return None
 
     # =========================================================================
@@ -1173,7 +1180,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 if os.path.exists(personality_path):
                     new_prompt = self._load_system_prompt(personality=personality_path)
                     self.llm.system_prompt = new_prompt
-                    print(f"[Soul] Updated LLM personality")
+                    print("[Soul] Updated LLM personality")
 
                 # Apply LLM overrides from soul config
                 if new_soul.llm:
@@ -1303,35 +1310,38 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
         Creates a natural conversation flow where the LLM can see
         what everyone said, not just the current speaker.
+
+        Time and channel context are provided as a system message,
+        not embedded in user content, to avoid the LLM mimicking
+        timestamp formats in its responses.
         """
         messages = []
         history = self._get_channel_history()
 
-        # Add time context at the start
+        # Add time/channel context as a system message (not user message)
+        # This way the LLM knows the context but won't mimic the format
         time_ctx = self._get_time_context()
         channel_ctx = self._get_channel_context()
 
-        # Build context preamble
-        context_parts = [f"[{time_ctx}]"]
+        context_parts = []
+        if time_ctx:
+            context_parts.append(f"Current time: {time_ctx}")
         if channel_ctx:
-            context_parts.append(f"[{channel_ctx}]")
+            context_parts.append(f"Channel: {channel_ctx}")
+
+        if context_parts:
+            messages.append({
+                "role": "system",
+                "content": " | ".join(context_parts)
+            })
 
         # Add recent conversation as context
         if history:
-            # Group consecutive messages by role for cleaner context
             for entry in history:
                 messages.append({
                     "role": entry["role"],
                     "content": entry["content"]
                 })
-
-        # If no history yet, add context to first user message
-        if not messages and context_parts:
-            return messages  # Will be added with first actual message
-
-        # Inject context into first user message if present
-        if messages and messages[0]["role"] == "user":
-            messages[0]["content"] = " ".join(context_parts) + " " + messages[0]["content"]
 
         return messages
 
@@ -1781,7 +1791,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         if not text.strip():
             logger.warning("TTS text empty after sanitization, skipping")
             return
-        
+
         if PERF_AVAILABLE and turn_id is not None:
             # Use TTSQueueItem for better staleness checking
             item = TTSQueueItem(

@@ -9,19 +9,17 @@ Tests cover:
 - Error handling
 """
 
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-from mumble_voice_bot.interfaces.llm import LLMResponse, ToolCall
+from mumble_voice_bot.interfaces.llm import LLMResponse
 from mumble_voice_bot.interfaces.tool_formatter import (
     LFM25ToolFormatter,
     OpenAIToolFormatter,
 )
 from mumble_voice_bot.providers.openai_llm import OpenAIChatLLM
-
 
 # --- Fixtures ---
 
@@ -602,7 +600,7 @@ class TestOpenAIChatLLMStreaming:
     async def test_chat_stream_basic(self):
         """Test basic streaming response."""
         from contextlib import asynccontextmanager
-        
+
         llm = OpenAIChatLLM(endpoint="http://test/v1/chat/completions", model="gpt-4")
 
         # Simulate SSE stream
@@ -645,7 +643,7 @@ class TestOpenAIChatLLMStreaming:
     async def test_chat_stream_filters_think_blocks(self):
         """Test streaming filters out <think>...</think> blocks."""
         from contextlib import asynccontextmanager
-        
+
         llm = OpenAIChatLLM(endpoint="http://test/v1/chat/completions", model="qwen3")
 
         async def mock_aiter_lines():

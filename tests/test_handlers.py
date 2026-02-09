@@ -402,7 +402,7 @@ class TestPresenceHandlerGreetings:
 
     def test_get_time_of_day_morning(self):
         """Test time of day detection for morning."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         mock_datetime = MagicMock()
         mock_datetime.now.return_value.hour = 9
@@ -412,7 +412,7 @@ class TestPresenceHandlerGreetings:
 
     def test_get_time_of_day_afternoon(self):
         """Test time of day detection for afternoon."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         mock_datetime = MagicMock()
         mock_datetime.now.return_value.hour = 14
@@ -422,7 +422,7 @@ class TestPresenceHandlerGreetings:
 
     def test_get_time_of_day_evening(self):
         """Test time of day detection for evening."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         mock_datetime = MagicMock()
         mock_datetime.now.return_value.hour = 19
@@ -432,7 +432,7 @@ class TestPresenceHandlerGreetings:
 
     def test_get_time_of_day_late_night(self):
         """Test time of day detection for late night."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         mock_datetime = MagicMock()
         mock_datetime.now.return_value.hour = 2

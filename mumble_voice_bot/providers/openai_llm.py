@@ -17,8 +17,8 @@ import httpx
 
 from mumble_voice_bot.interfaces.llm import LLMProvider, LLMResponse, ToolCall
 from mumble_voice_bot.interfaces.tool_formatter import (
-    ToolFormatter,
     OpenAIToolFormatter,
+    ToolFormatter,
     get_tool_formatter,
 )
 from mumble_voice_bot.logging_config import get_logger
@@ -91,13 +91,13 @@ class OpenAIChatLLM(LLMProvider):
         self.repetition_penalty = repetition_penalty
         self.frequency_penalty = frequency_penalty
         self.presence_penalty = presence_penalty
-        
+
         # Get the appropriate tool formatter for this model
         self._tool_formatter = get_tool_formatter(model)
         self._is_openai_tools = isinstance(self._tool_formatter, OpenAIToolFormatter)
         formatter_name = "OpenAI" if self._is_openai_tools else "LFM2.5"
         logger.info(f"Using {formatter_name} tool formatter for model: {model}")
-    
+
     @property
     def tool_formatter(self) -> ToolFormatter:
         """Get the tool formatter for this LLM."""
@@ -113,10 +113,10 @@ class OpenAIChatLLM(LLMProvider):
     def _build_messages(self, messages: list[dict], tools: list[dict] | None = None) -> list[dict]:
         """Build the full message list including system prompt and tool definitions."""
         full_messages = []
-        
+
         # Build system prompt, potentially with tool definitions appended
         system_content = self.system_prompt or ""
-        
+
         # For text-based tool formatters, add tool definitions to system prompt
         if tools and not self._is_openai_tools:
             formatted = self._tool_formatter.format_tools(tools)
@@ -222,7 +222,7 @@ class OpenAIChatLLM(LLMProvider):
 
         # Parse tool calls - either from structured response or from text
         tool_calls = []
-        
+
         # First check for OpenAI-style structured tool calls
         if "tool_calls" in message and message["tool_calls"]:
             for tc in message["tool_calls"]:
@@ -239,7 +239,7 @@ class OpenAIChatLLM(LLMProvider):
                     ))
                 except (json.JSONDecodeError, KeyError) as e:
                     logger.warning(f"Failed to parse tool call: {e}")
-        
+
         # For text-based tool formats (e.g., LFM2.5), parse from content
         if not tool_calls and content and tools:
             # Log raw content for debugging tool call detection

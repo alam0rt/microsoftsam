@@ -10,8 +10,7 @@ Tests cover:
 
 import asyncio
 import threading
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -34,10 +33,9 @@ from mumble_voice_bot.interfaces.events import (
     UserUpdatedEvent,
 )
 from mumble_voice_bot.providers.mumble_events import (
-    EventDispatcher,
     PYMUMBLE_TO_EVENT_TYPE,
+    EventDispatcher,
 )
-
 
 # --- Mock Handlers ---
 
@@ -517,7 +515,7 @@ class TestEventConversion:
         mock_users = MagicMock()
         mock_users.__contains__ = MagicMock(return_value=True)
         mock_users.__getitem__ = MagicMock(return_value=mock_user_42)
-        
+
         # myself is accessed via .myself.get("session")
         mock_myself = MagicMock()
         mock_myself.get.return_value = 1

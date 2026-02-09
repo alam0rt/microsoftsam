@@ -9,8 +9,6 @@ Tests cover:
 """
 
 import os
-import tempfile
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -18,21 +16,20 @@ import pytest
 from mumble_voice_bot.config import (
     BotConfig,
     LLMConfig,
-    MumbleConfig,
     ModelsConfig,
+    MumbleConfig,
     PipelineBotConfig,
     SoulConfig,
     SoulFallbacks,
-    STTConfig,
-    TTSConfig,
-    ToolsConfig,
     StreamingPipelineConfig,
+    STTConfig,
+    ToolsConfig,
+    TTSConfig,
     _expand_env_vars,
     create_example_config,
     load_config,
     load_soul_config,
 )
-
 
 # --- Fixtures ---
 
@@ -517,7 +514,7 @@ llm:
         # Create the test soul directory structure
         soul_dir = target_souls_dir / "test_soul"
         soul_dir.mkdir()
-        
+
         soul_yaml = """
 name: "Test Soul"
 description: "A test personality"

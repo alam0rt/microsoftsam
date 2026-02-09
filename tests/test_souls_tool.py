@@ -8,14 +8,12 @@ Tests cover:
 - Error handling
 """
 
-import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from mumble_voice_bot.tools.souls import SoulsTool
-
 
 # --- Fixtures ---
 

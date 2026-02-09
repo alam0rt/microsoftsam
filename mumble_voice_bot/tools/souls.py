@@ -5,10 +5,10 @@ the bot's personality at runtime.
 """
 
 from pathlib import Path
-from typing import Any, Callable, Awaitable
+from typing import Any, Awaitable, Callable
 
-from mumble_voice_bot.tools.base import Tool
 from mumble_voice_bot.logging_config import get_logger
+from mumble_voice_bot.tools.base import Tool
 
 logger = get_logger(__name__)
 

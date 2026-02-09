@@ -1,16 +1,13 @@
 """Tests for tool call formatters."""
 
-import pytest
 
 from mumble_voice_bot.interfaces.llm import ToolCall
 from mumble_voice_bot.interfaces.tool_formatter import (
-    ToolFormatter,
-    OpenAIToolFormatter,
-    LFM25ToolFormatter,
     FormattedTools,
+    LFM25ToolFormatter,
+    OpenAIToolFormatter,
     get_tool_formatter,
 )
-
 
 # Sample tools in OpenAI format for testing
 SAMPLE_TOOLS = [

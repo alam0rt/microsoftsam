@@ -13,20 +13,17 @@ Tests cover:
 
 import asyncio
 import time
-from dataclasses import dataclass
-from typing import Any, AsyncIterator
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import AsyncIterator
 
 import pytest
 
-from mumble_voice_bot.interfaces.llm import LLMResponse, ToolCall
+from mumble_voice_bot.interfaces.llm import LLMResponse
 from mumble_voice_bot.pipeline import (
     PipelineConfig,
     PipelineResult,
     TranscriptionResult,
     VoicePipeline,
 )
-
 
 # --- Mock Providers ---
 
@@ -381,7 +378,7 @@ class TestLLMResponse:
 
         # Check that second call included history
         assert mock_llm.call_count == 2
-        
+
         # Note: last_messages holds a reference to the internal history list,
         # which gets mutated after the chat call returns. So we see 4 messages:
         # Hello, response1, How are you?, response2
@@ -545,13 +542,13 @@ class TestPipelineWithTools:
         mock_llm.responses = ["I'll search for that.", "Here are the results."]
 
         # First turn
-        response1 = await pipeline.generate_response("Search for news", user_id="user1")
+        await pipeline.generate_response("Search for news", user_id="user1")
 
         # Simulate tool execution by adding to history manually
         pipeline._add_to_history("user1", "tool", "Tool result: Breaking news...")
 
         # Second turn with tool result
-        response2 = await pipeline.generate_response("What did you find?", user_id="user1")
+        await pipeline.generate_response("What did you find?", user_id="user1")
 
         history = pipeline._get_history("user1")
         # Should have: user, assistant, tool, user, assistant

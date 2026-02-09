@@ -1,7 +1,8 @@
 """Tests for the tool system."""
 
-import pytest
 from typing import Any
+
+import pytest
 
 from mumble_voice_bot.tools import Tool, ToolRegistry
 

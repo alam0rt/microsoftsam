@@ -89,10 +89,10 @@ class Tool(ABC):
     @property
     def example_call(self) -> str | None:
         """Example of how to call this tool (for LLM prompting).
-        
+
         Override to provide a specific example for the LLM.
         Example: 'sound_effects(action="play", query="airhorn")'
-        
+
         Returns:
             Example call string, or None to auto-generate from parameters.
         """
@@ -101,9 +101,9 @@ class Tool(ABC):
     @property
     def usage_hint(self) -> str | None:
         """Short hint about when to use this tool.
-        
+
         Example: "Use when asked to play sounds or sound effects"
-        
+
         Returns:
             Usage hint string, or None if not needed.
         """
