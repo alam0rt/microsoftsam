@@ -4,15 +4,15 @@ soul: "raf"
 
 llm:
   endpoint: "https://openrouter.ai/api/v1/chat/completions"
-  model: "arcee-ai/trinity-large-preview:free"
+  model: "nvidia/nemotron-3-nano-30b-a3b:free"
   # api_key loaded from OPENROUTER_API_KEY env var
   timeout: 8.0  # ~0.5s latency + buffer for tool calls
   max_tokens: 150  # Keep voice responses short and snappy
-  temperature: 0.8  # Natural, creative conversation - Trinity excels at roleplay
+  temperature: 0.7  # Slightly lower for more reliable tool calling
   top_p: 0.9
   frequency_penalty: 0.3  # Reduce repetition
   presence_penalty: 0.2   # Encourage topic variety
-  context_messages: 16    # Trinity has 131k context, can handle more history
+  context_messages: 16    # Nemotron has 256k context
 
 tts:
   num_steps: 4
