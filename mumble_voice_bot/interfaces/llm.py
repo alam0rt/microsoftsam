@@ -55,6 +55,7 @@ class LLMProvider(ABC):
         messages: list[dict],
         context: dict | None = None,
         tools: list[dict] | None = None,
+        bot_name: str | None = None,
     ) -> LLMResponse:
         """Generate a response from a conversation.
 
@@ -64,6 +65,7 @@ class LLMProvider(ABC):
             context: Optional context dict for provider-specific options.
             tools: Optional list of tool definitions in OpenAI format.
                    When provided, the LLM may return tool_calls instead of content.
+            bot_name: Optional bot name for debug logging.
 
         Returns:
             LLMResponse containing the generated text, tool calls, and metadata.

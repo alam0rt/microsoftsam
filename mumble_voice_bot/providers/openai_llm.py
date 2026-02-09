@@ -10,7 +10,10 @@ This provider works with any service that implements the OpenAI Chat Completions
 """
 
 import json
+import os
 import time
+from datetime import datetime
+from pathlib import Path
 from typing import AsyncIterator
 
 import httpx
@@ -24,6 +27,26 @@ from mumble_voice_bot.interfaces.tool_formatter import (
 from mumble_voice_bot.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+# Debug file logger for LLM requests
+_debug_log_path = Path("logs/debug.log")
+_debug_log_enabled = os.environ.get("LLM_DEBUG_LOG", "1") == "1"
+
+def _log_llm_debug(bot_name: str, event: str, data: dict) -> None:
+    """Write debug info to logs/debug.log for LLM request analysis."""
+    if not _debug_log_enabled:
+        return
+    try:
+        _debug_log_path.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        with open(_debug_log_path, "a") as f:
+            f.write(f"\n{'='*80}\n")
+            f.write(f"[{timestamp}] BOT: {bot_name} | EVENT: {event}\n")
+            f.write(f"{'='*80}\n")
+            f.write(json.dumps(data, indent=2, default=str))
+            f.write("\n")
+    except Exception as e:
+        logger.warning(f"Failed to write debug log: {e}")
 
 
 class OpenAIChatLLM(LLMProvider):
@@ -177,6 +200,7 @@ class OpenAIChatLLM(LLMProvider):
         messages: list[dict],
         context: dict | None = None,
         tools: list[dict] | None = None,
+        bot_name: str | None = None,
     ) -> LLMResponse:
         """Generate a chat completion response.
 
@@ -201,6 +225,16 @@ class OpenAIChatLLM(LLMProvider):
         logger.info(f'LLM request ({context_count} ctx msgs): "{user_message[:100]}..."' if len(user_message) > 100 else f'LLM request ({context_count} ctx msgs): "{user_message}"')
         if tools:
             logger.info(f"LLM request includes {len(tools)} tool(s): {[t.get('function', {}).get('name', '?') for t in tools]}")
+
+        # Debug log: full request details to file
+        _log_llm_debug(bot_name or "unknown", "REQUEST", {
+            "system_prompt": self.system_prompt[:500] + "..." if self.system_prompt and len(self.system_prompt) > 500 else self.system_prompt,
+            "system_prompt_length": len(self.system_prompt) if self.system_prompt else 0,
+            "messages": messages,
+            "tools": [t.get("function", {}).get("name") for t in (tools or [])],
+            "model": self.model,
+            "endpoint": self.endpoint,
+        })
 
         start_time = time.time()
 
@@ -303,6 +337,16 @@ class OpenAIChatLLM(LLMProvider):
 
         if latency_ms > 2000:
             logger.warning(f"LLM slow response: {latency_ms:.0f}ms (>2s)")
+
+        # Debug log: full response details to file
+        _log_llm_debug(bot_name or "unknown", "RESPONSE", {
+            "content": content,
+            "tool_calls": [{"name": tc.name, "arguments": tc.arguments} for tc in tool_calls] if tool_calls else [],
+            "finish_reason": finish_reason,
+            "latency_ms": latency_ms,
+            "model": data.get("model"),
+            "usage": data.get("usage"),
+        })
 
         return LLMResponse(
             content=content,

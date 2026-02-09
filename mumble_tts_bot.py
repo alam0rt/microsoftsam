@@ -1867,8 +1867,8 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         while iteration < max_iterations:
             iteration += 1
 
-            # Call LLM with tools
-            response = await self.llm.chat(messages, tools=tools)
+            # Call LLM with tools (pass bot name for debug logging)
+            response = await self.llm.chat(messages, tools=tools, bot_name=self.user)
 
             # If LLM wants to call tools, execute them
             if response.has_tool_calls:
@@ -1942,7 +1942,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         if hasattr(self, '_bot_system_prompt') and self._bot_system_prompt:
             self.llm.system_prompt = self._bot_system_prompt
         response = self._run_coro_sync(
-            self.llm.chat([{"role": "user", "content": prompt}])
+            self.llm.chat([{"role": "user", "content": prompt}], bot_name=self.user)
         )
         return response.content
 
