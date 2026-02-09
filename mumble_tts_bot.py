@@ -1009,11 +1009,22 @@ class MumbleVoiceBot:
 
         # Multi-bot coordination (shared echo filter so all bots know what all bots said)
         self._shared_echo_filter = shared_echo_filter
-        self._shared_services = shared_services
+        
+        # SharedBotServices handles the event journal and coordination
+        # Always use it - even for single-bot mode (creates one if not provided)
+        if shared_services is not None:
+            self._shared_services = shared_services
+        else:
+            # Single-bot mode: create our own SharedBotServices
+            self._shared_services = SharedBotServices(
+                tts=shared_tts,
+                stt=shared_stt,
+                llm=shared_llm,
+                device=device,
+            )
 
         # Register to receive utterances from other bots (fake ASR)
-        if self._shared_services:
-            self._shared_services.register_utterance_listener(self._on_bot_utterance)
+        self._shared_services.register_utterance_listener(self._on_bot_utterance)
 
         # Pending transcriptions (for accumulating long utterances)
         self.pending_text = {}  # user_id -> accumulated text
@@ -1928,8 +1939,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         Creates a natural conversation flow where the LLM can see
         what everyone said, not just the current speaker.
 
-        Uses the unified journal from SharedBotServices as the source of truth.
-        Falls back to local channel_history if no shared services (single-bot mode).
+        Uses the unified journal from SharedBotServices as the single source of truth.
         """
         messages = []
 
@@ -1949,21 +1959,9 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 "content": " | ".join(context_parts)
             })
 
-        # Get conversation history from the shared journal (preferred)
-        # or fall back to local channel_history (single-bot mode)
-        if self._shared_services:
-            # Use the unified journal
-            history = self._shared_services.get_recent_messages_for_llm(max_messages=20)
-            messages.extend(history)
-        else:
-            # Fallback: use local channel history
-            history = self._get_channel_history()
-            if history:
-                for entry in history:
-                    messages.append({
-                        "role": entry["role"],
-                        "content": entry["content"]
-                    })
+        # Get conversation history from the unified journal
+        history = self._shared_services.get_recent_messages_for_llm(max_messages=20)
+        messages.extend(history)
 
         return messages
 
@@ -1979,17 +1977,12 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         """Add a message to conversation history via the shared journal.
 
         This is the single entry point for adding messages to context.
-        Logs to the shared journal (multi-bot) or local history (single-bot).
+        Always logs to the shared journal (the unified source of truth).
         """
-        # Log to shared journal if available (multi-bot mode)
-        if self._shared_services:
-            if role == "user":
-                self._shared_services.log_event("user_message", user_name, content)
-            elif role == "assistant":
-                self._shared_services.log_event("bot_message", self.user, content)
-        else:
-            # Fallback to local channel history (single-bot mode)
-            self._add_to_channel_history(role, content, user_name)
+        if role == "user":
+            self._shared_services.log_event("user_message", user_name, content)
+        elif role == "assistant":
+            self._shared_services.log_event("bot_message", self.user, content)
 
     async def _generate_response(self, user_id: int, text: str, user_name: str = None) -> str:
         """Generate LLM response, executing any tool calls.
@@ -2161,7 +2154,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         # MULTI-BOT: Ignore ALL audio when ANY bot is speaking
         # Other bots receive speech via broadcast_utterance (fake ASR), not real audio
         # This prevents double-processing: real ASR + fake ASR on same speech
-        if self._shared_services and self._shared_services.any_bot_speaking():
+        if self._shared_services.any_bot_speaking():
             return  # Bot is talking - ignore audio, we'll get text via fake ASR
 
         # CRITICAL: Ignore all audio while bot is speaking to prevent feedback
@@ -2174,10 +2167,10 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             # (including ourselves). The loud audio is likely bot TTS, not a human interrupting.
             # This prevents: 1) self-interruption from our own echo, 2) bots interrupting each other
             if self.barge_in_enabled:
-                # In multi-bot mode: any bot speaking = ignore (no valid barge-in target)
-                if self._shared_services and self._shared_services.any_bot_speaking():
+                # Any bot speaking = ignore (no valid barge-in target)
+                if self._shared_services.any_bot_speaking():
                     return  # Bot audio - not a human interruption
-                # Single-bot mode: allow barge-in from humans
+                # Allow barge-in from humans
                 rms = pcm_rms(sound_chunk.pcm)
                 barge_in_threshold = self.asr_threshold * 3  # Much higher threshold for barge-in
                 if self.turn_controller and rms > barge_in_threshold:
@@ -2444,7 +2437,7 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             waited = 0.0
             while waited < max_wait:
                 # Check if any bot is speaking (not just us) - wait if so
-                if self._shared_services and self._shared_services.any_bot_speaking():
+                if self._shared_services.any_bot_speaking():
                     time_module.sleep(0.5)
                     waited += 0.5
                     continue
@@ -2507,12 +2500,11 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
                 if tracker:
                     tracker.llm_start()
 
-                # In multi-bot mode, try to claim this response
+                # Try to claim this response
                 # Only one responder should reply to each utterance (natural turn-taking)
-                if self._shared_services:
-                    if not self._shared_services.try_claim_response(user_id, text):
-                        self.logger.debug(f"Someone else responding to: {text[:30]}...")
-                        return
+                if not self._shared_services.try_claim_response(user_id, text):
+                    self.logger.debug(f"Someone else responding to: {text[:30]}...")
+                    return
 
                 self.logger.info(f'Generating response for {user_name}: "{text}"')
                 llm_start = time.time()
@@ -2676,13 +2668,11 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
         # Broadcast utterance to other bots (they receive it as "fake ASR")
         # This lets bots hear each other without actual audio processing
-        if self._shared_services:
-            self._shared_services.broadcast_utterance(self.user, text)
+        self._shared_services.broadcast_utterance(self.user, text)
 
         self._speaking.set()
-        # Notify shared services that this bot started speaking (for multi-bot barge-in suppression)
-        if self._shared_services:
-            self._shared_services.bot_started_speaking()
+        # Notify shared services that this bot started speaking (for barge-in suppression)
+        self._shared_services.bot_started_speaking()
 
         # Update conversation state machine
         if self.conversation_state_machine:
@@ -2789,9 +2779,8 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             self.pending_text_time.clear()
 
             self._speaking.clear()
-            # Notify shared services that this bot stopped speaking (for multi-bot barge-in suppression)
-            if self._shared_services:
-                self._shared_services.bot_stopped_speaking()
+            # Notify shared services that this bot stopped speaking
+            self._shared_services.bot_stopped_speaking()
             # Reset turn controller to idle
             if self.turn_controller:
                 self.turn_controller.reset()
