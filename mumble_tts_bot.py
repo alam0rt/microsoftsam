@@ -207,6 +207,51 @@ def _pad_tts_text(text: str, min_chars: int = 20, min_words: int = 4) -> str:
     return cleaned
 
 
+def _sanitize_for_tts(text: str) -> str:
+    """Remove emojis and non-speakable characters from text for TTS.
+    
+    Strips: emojis, asterisks, dashes used for formatting, etc.
+    Keeps: letters, numbers, basic punctuation (.,!?'), spaces.
+    """
+    import re
+    
+    # Remove emojis (Unicode emoji ranges)
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F600-\U0001F64F"  # emoticons
+        "\U0001F300-\U0001F5FF"  # symbols & pictographs
+        "\U0001F680-\U0001F6FF"  # transport & map symbols
+        "\U0001F1E0-\U0001F1FF"  # flags
+        "\U00002702-\U000027B0"  # dingbats
+        "\U0001F900-\U0001F9FF"  # supplemental symbols
+        "\U0001FA00-\U0001FA6F"  # chess symbols
+        "\U0001FA70-\U0001FAFF"  # symbols extended
+        "\U00002600-\U000026FF"  # misc symbols (sun, clouds, etc)
+        "]+",
+        flags=re.UNICODE
+    )
+    text = emoji_pattern.sub("", text)
+    
+    # Remove emoji modifiers, joiners, and variation selectors that may be left behind
+    # after removing complex emojis (e.g., 🕵️‍♂️ leaves \u200d and \ufe0f)
+    text = re.sub(r'[\u200d\ufe0e\ufe0f]', '', text)  # ZWJ and variation selectors
+    
+    # Remove formatting characters: *, _, ~, `, #, |, <, >, [], {}
+    text = re.sub(r'[\*_~`#|<>\[\]{}]', '', text)
+    
+    # Replace em-dash and en-dash with space
+    text = re.sub(r'[—–]', ' ', text)  # em-dash (—) and en-dash (–)
+    
+    # Replace multiple dashes with single dash, then remove standalone dashes
+    text = re.sub(r'-{2,}', ' ', text)  # -- or --- to space
+    text = re.sub(r'\s-\s', ' ', text)  # " - " to space
+    
+    # Clean up multiple spaces
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    return text
+
+
 class StreamingLuxTTS(LuxTTS):
     """Extended LuxTTS with streaming support and bug fixes."""
 
@@ -1718,6 +1763,12 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
             tracker: LatencyTracker for this turn.
             turn_id: Turn ID for staleness checking.
         """
+        # Sanitize text: remove emojis and non-speakable characters
+        text = _sanitize_for_tts(text)
+        if not text.strip():
+            logger.warning("TTS text empty after sanitization, skipping")
+            return
+        
         if PERF_AVAILABLE and turn_id is not None:
             # Use TTSQueueItem for better staleness checking
             item = TTSQueueItem(
