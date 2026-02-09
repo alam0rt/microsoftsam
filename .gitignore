@@ -24,6 +24,10 @@ models/
 *.ogg
 sounds/
 
+# logs
+*.log
+logs/
+
 # secrets
 secrets/
 .secrets/
