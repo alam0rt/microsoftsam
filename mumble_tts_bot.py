@@ -50,6 +50,14 @@ from mumble_voice_bot.logging_config import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
+# Import ParrotBot for parrot personas
+try:
+    from parrot_bot import ParrotBot
+    PARROT_BOT_AVAILABLE = True
+except ImportError:
+    PARROT_BOT_AVAILABLE = False
+    ParrotBot = None
+
 # Import LLM components
 try:
     from mumble_voice_bot.config import ConfigValidationError, load_config
@@ -3493,6 +3501,29 @@ def run_multi_persona_bot(args):
         # Get Mumble connection info
         mumble_user = identity.mumble_user or identity.display_name or identity.name
         mumble_channel = persona_config.mumble.get("channel") if persona_config.mumble else None
+
+        # Check if this is a parrot persona (no soul, special type)
+        is_parrot = identity.name.lower() == "parrot" and persona_config.soul_config is None
+        
+        if is_parrot:
+            # Create ParrotBot instead of MumbleVoiceBot
+            if not PARROT_BOT_AVAILABLE:
+                print(f"  ERROR: ParrotBot not available for persona '{identity.name}'")
+                continue
+            
+            print(f"  Creating ParrotBot: {identity.name} as '{mumble_user}'")
+            bot = ParrotBot(
+                host=config.mumble_host or "localhost",
+                port=config.mumble_port or 64738,
+                user=mumble_user,
+                password=config.mumble_password or "",
+                channel=mumble_channel,
+                device=device,
+                shared_tts=shared.tts,
+                shared_stt=shared.stt,
+            )
+            bots.append(bot)
+            continue
 
         # Determine ref_audio path: tts config > soul voice config
         tts_config = persona_config.tts or {}

@@ -2,6 +2,10 @@
 # Runs both Raf and Zapp Brannigan who can talk to each other
 
 personas:
+  - name: parrot
+    mumble:
+      user: "Parrot"
+      channel: null  # Join root/default channel
   - name: raf
     soul: raf
     mumble:
