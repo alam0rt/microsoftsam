@@ -76,12 +76,17 @@ def ensure_models_downloaded(device: str = 'cuda') -> None:
     whisper_model = "openai/whisper-base" if device != 'cpu' else "openai/whisper-tiny"
     print(f"[Models] Checking Whisper model ({whisper_model})...")
     try:
-        # This will download if not cached, or load from cache
+        # Load on CPU just to verify download; suppress F5-TTS "Device set to use cpu" noise
+        import logging as _logging
+        _f5_logger = _logging.getLogger("f5_tts")
+        _old_level = _f5_logger.level
+        _f5_logger.setLevel(_logging.WARNING)
         _ = hf_pipeline(
             "automatic-speech-recognition",
             model=whisper_model,
-            device='cpu'  # Load on CPU just to verify download, actual device set later
+            device='cpu'  # Verification only, actual device set later
         )
+        _f5_logger.setLevel(_old_level)
         print(f"[Models] Whisper ready: {whisper_model}")
     except Exception as e:
         print(f"[Models] Failed to download Whisper: {e}")
