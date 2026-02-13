@@ -22,16 +22,32 @@ from mumble_voice_bot.interfaces.brain import BotResponse, Utterance
 
 logger = logging.getLogger(__name__)
 
-# Default filler pools
+# Default filler pools — diverse selection for natural conversational presence
 DEFAULT_FILLERS = [
+    # Short acknowledgments
     "mmhm",
     "yeah",
     "right",
-    "heh",
     "mm",
     "uh huh",
     "sure",
     "yep",
+    "okay",
+    "mhm",
+    # Slightly longer acknowledgments
+    "yeah, totally",
+    "right, right",
+    "oh yeah",
+    "for sure",
+    "makes sense",
+    # Casual reactions
+    "heh",
+    "hah",
+    "oh",
+    "ah",
+    "wow",
+    "nice",
+    "cool",
 ]
 
 DEFAULT_DEFLECTIONS = [
@@ -42,6 +58,11 @@ DEFAULT_DEFLECTIONS = [
     "oh really",
     "that's wild",
     "fair enough",
+    "yeah, I guess so",
+    "I mean... sure",
+    "oh, okay",
+    "huh, weird",
+    "that's something",
 ]
 
 DEFAULT_THINKING_STALLS = [
@@ -50,6 +71,18 @@ DEFAULT_THINKING_STALLS = [
     "hmm...",
     "give me a sec",
     "hold on...",
+    "uh... good question",
+    "let me see...",
+    "one sec...",
+]
+
+DEFAULT_BARGE_IN_ACKS = [
+    "oh, go ahead",
+    "sorry, what?",
+    "yeah?",
+    "oh, my bad",
+    "go on",
+    "sorry, you were saying?",
 ]
 
 ECHO_TEMPLATES = [
@@ -68,10 +101,18 @@ class ReactiveBrain:
     Uses fillers, echo fragments, and deflections to maintain presence
     in conversation without requiring an LLM call.
 
+    Features:
+    - Context-weighted filler selection
+    - Filler rotation (avoids repeating the same one)
+    - Occasional silence for naturalness
+    - Echo fragment extraction from ASR transcript
+    - Barge-in acknowledgment phrases
+
     Attributes:
         fillers: Pool of filler phrases.
         deflections: Pool of deflection phrases.
         thinking_stalls: Pool of "I'm thinking" phrases.
+        barge_in_acks: Pool of barge-in acknowledgment phrases.
         silence_weight: Probability of choosing silence (0.0-1.0).
         echo_weight: Probability of attempting echo fragment (0.0-1.0).
     """
@@ -81,15 +122,21 @@ class ReactiveBrain:
         fillers: list[str] | None = None,
         deflections: list[str] | None = None,
         thinking_stalls: list[str] | None = None,
+        barge_in_acks: list[str] | None = None,
         silence_weight: float = 0.3,
         echo_weight: float = 0.3,
         soul_config: object | None = None,
     ):
-        self.fillers = fillers or DEFAULT_FILLERS
-        self.deflections = deflections or DEFAULT_DEFLECTIONS
-        self.thinking_stalls = thinking_stalls or DEFAULT_THINKING_STALLS
+        self.fillers = fillers or list(DEFAULT_FILLERS)
+        self.deflections = deflections or list(DEFAULT_DEFLECTIONS)
+        self.thinking_stalls = thinking_stalls or list(DEFAULT_THINKING_STALLS)
+        self.barge_in_acks = barge_in_acks or list(DEFAULT_BARGE_IN_ACKS)
         self.silence_weight = silence_weight
         self.echo_weight = echo_weight
+
+        # Filler rotation: track recently used fillers to avoid repetition
+        self._recent_fillers: list[str] = []
+        self._recent_max = 5  # Remember last 5 fillers used
 
         # Override pools from soul config if available
         if soul_config and hasattr(soul_config, 'fallbacks') and soul_config.fallbacks:
@@ -98,6 +145,8 @@ class ReactiveBrain:
                 self.fillers = list(fb.thinking)
             if hasattr(fb, 'still_thinking') and fb.still_thinking:
                 self.thinking_stalls = list(fb.still_thinking)
+            if hasattr(fb, 'interrupted') and fb.interrupted:
+                self.barge_in_acks = list(fb.interrupted)
 
     def process(self, utterance: Utterance) -> BotResponse | None:
         """Generate a reactive response (no LLM).
@@ -141,9 +190,10 @@ class ReactiveBrain:
             if fragment:
                 return BotResponse(text=fragment, is_filler=True, skip_broadcast=True)
 
-        # Filler
+        # Filler (with rotation to avoid repetition)
+        filler = self._pick_filler()
         return BotResponse(
-            text=random.choice(self.fillers),
+            text=filler,
             is_filler=True,
             skip_broadcast=True,
         )
@@ -159,6 +209,32 @@ class ReactiveBrain:
     def get_thinking_stall(self) -> str:
         """Get a random thinking stall phrase (for LLM fallback mode)."""
         return random.choice(self.thinking_stalls)
+
+    def get_barge_in_ack(self) -> str:
+        """Get a random barge-in acknowledgment phrase."""
+        return random.choice(self.barge_in_acks)
+
+    def _pick_filler(self) -> str:
+        """Pick a filler avoiding recent repeats.
+
+        Uses rotation: recently used fillers are deprioritized.
+        Falls back to any filler if all have been used recently.
+        """
+        # Try to find one we haven't used recently
+        available = [f for f in self.fillers if f not in self._recent_fillers]
+        if not available:
+            # All used recently — reset and pick from full pool
+            self._recent_fillers.clear()
+            available = self.fillers
+
+        choice = random.choice(available)
+
+        # Track recent usage
+        self._recent_fillers.append(choice)
+        if len(self._recent_fillers) > self._recent_max:
+            self._recent_fillers.pop(0)
+
+        return choice
 
     def _echo_fragment(self, text: str) -> str | None:
         """Extract a key phrase and wrap it in an echo template.

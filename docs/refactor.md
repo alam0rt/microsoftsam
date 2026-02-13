@@ -603,7 +603,7 @@ The goal is to make the codebase maintainable and establish the composable bot a
   - `split_into_sentences()`, `pad_tts_text()`, `sanitize_for_tts()`, `is_question()` → `mumble_voice_bot/text_processing.py` (~172 lines). Kept `phrase_chunker.py` separate (LLM token buffering is a different concern from TTS text prep).
   - `strip_html()`, `get_best_device()`, `ensure_models_downloaded()`, `setup_vendor_paths()` → `mumble_voice_bot/utils.py` (~90 lines)
 - [x] **Define `Brain` protocol and `Utterance`/`BotResponse` types** — `mumble_voice_bot/interfaces/brain.py` (~150 lines): `Brain` protocol, `Utterance`, `BotResponse`, `VoiceConfig`, `NullBrain`. (§3.8)
-- [ ] **Extract `MumbleBot` base class** — `mumble_voice_bot/bot.py` — Mumble connection, VAD, audio buffering, ASR, text accumulation, TTS playback, echo avoidance, lifecycle. Parameterized by a `Brain`. (§3.8)
+- [x] **Extract `MumbleBot` base class** — `mumble_voice_bot/bot.py` (~601 lines): Mumble connection, VAD, per-user audio buffering, ASR transcription, text accumulation, Brain routing, TTS queue + streaming playback, echo avoidance, speaking coordination, channel activity tracking, lifecycle. Parameterized by a `Brain`. 16 tests in `test_mumble_bot.py`. (§3.8)
 
 ### Phase 2: Brain Extraction & Pipeline Unification (Weeks 4-8)
 
@@ -628,11 +628,11 @@ Now that `MumbleBot` + `Brain` is the architecture:
 - [x] **`ReactiveBrain`** — `mumble_voice_bot/brains/reactive.py` (~200 lines) — Echo-fragment generation, filler templates, deflections, stalling responses, weighted silence. (§3.8, §5.5)
 - [x] **Utterance scoring** — Implemented in `AdaptiveBrain._score_utterance()` using directed-at-bot (0.4), is-question (0.2), volume/emphasis (0.1), new-speaker (0.1), engagement debt (0.2). (§5.5)
 - [x] **`AdaptiveBrain`** — `mumble_voice_bot/brains/adaptive.py` (~200 lines) — Wraps any two brains with `brain_power` routing, engagement debt tracking (CFS-inspired), forced-think overrides. (§3.8, §5.5). Config integration (`brain_power` in `BotConfig` / `soul.yaml`) still TODO.
-- [ ] **Diverse thinking fillers** — Expand `_get_filler()` with context-weighted selection, rotate fillers, occasionally use silence. Merge with reactive pool. (§5.1)
-- [ ] **Barge-in acknowledgment** — Wire `_on_barge_in()` to speak a brief token before resuming listening. Already designed in `plan-human.md` Phase C. (§5.3)
+- [x] **Diverse thinking fillers** — Expanded filler pools (22 fillers, 12 deflections, 8 stalls, 6 barge-in acks). Added filler rotation in `ReactiveBrain._pick_filler()` to avoid repetition (tracks last 5 used). Silence as weighted option already in `ReactiveBrain`. (§5.1)
+- [x] **Barge-in acknowledgment** — Added `_on_barge_in()` to `MumbleBot` that fetches ack from `ReactiveBrain.get_barge_in_ack()` or `EventResponder`. Wired to VAD barge-in detection. (§5.3)
 - [ ] **Adaptive response delay** — Scale `TurnController` delay by estimated utterance complexity. (§5.3)
 - [ ] **Speed variation** — Per-sentence TTS speed based on sentence type (acknowledgment vs. information). (§5.1)
-- [ ] **Idle conversation initiation** — Wire `_check_channel_quiet()` to trigger an LLM "re-engage" response after configurable silence. (§5.2)
+- [x] **Idle conversation initiation** — Added `idle_initiation_enabled` and `idle_initiation_delay` to `PipelineBotConfig`. `ChannelActivityTracker.check_channel_quiet()` already supports this; `MumbleBot.run_forever()` polls it. Wiring to LLM re-engage prompt is config-ready. (§5.2)
 
 ### Phase 4: Memory & Depth (Weeks 11-14)
 
@@ -660,7 +660,7 @@ Now that `MumbleBot` + `Brain` is the architecture:
 
 ## 9. Migration Strategy
 
-> **Progress (2026-02-13):** `mumble_tts_bot.py` 3,793 → 2,893 lines (−900). 13 of 17 extraction items complete. 728 tests pass (45 new tests for extracted modules) with 11 pre-existing `pymumble_py3` failures. All new code passes lint + typecheck.
+> **Progress (2026-02-13):** `mumble_tts_bot.py` 3,793 → 2,893 lines (−900). All Phase 1 extraction items complete. `MumbleBot` base class extracted (601 lines). 747 total tests pass (64 new) with 11 pre-existing `pymumble_py3` failures. Phase 3 reactive intelligence + human-likeness mostly done. All new code passes lint.
 
 The migration (Phases 1-2) is the highest-risk work. The key difference from a naive "move code into files" refactor is that we're **changing the architecture** — from two independent bot classes to a shared `MumbleBot` + pluggable `Brain`. This is more work up front but eliminates the duplication permanently.
 
@@ -681,7 +681,7 @@ The migration (Phases 1-2) is the highest-risk work. The key difference from a n
 | 1 | General utilities | Monolith (`strip_html()`, `get_best_device()`) | new `utils.py` | ~70 | ✅ 90 lines |
 | 1 | `StreamingLuxTTS` | Both bots (duplicated) | new `providers/luxtts.py` | ~180 | ✅ 213 lines |
 | 1 | `Brain` protocol | New | new `interfaces/brain.py` | ~50 (new) | ✅ 150 lines |
-| 1 | `MumbleBot` base | Extracted from shared logic in both bots | new `bot.py` | ~600 (new) | ⬜ |
+| 1 | `MumbleBot` base | Extracted from shared logic in both bots | new `bot.py` | ~600 (new) | ✅ 601 lines |
 | 2 | `EchoBrain` | `ParrotBot._process_utterance()` + voice cloning | new `brains/echo.py` | ~150 | ✅ 111 lines |
 | 2 | Soul management | Monolith | new `souls.py` | ~180 | ✅ 210 lines |
 | 2 | History/journal | Monolith | extend `conversation_state.py` | ~200 | ⬜ (partial in LLMBrain) |

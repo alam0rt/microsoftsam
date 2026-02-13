@@ -471,6 +471,42 @@ class TestEventResponder:
         assert "sam" in greeting
 
 
+class TestReactiveBrainFillerRotation:
+    """Tests for filler rotation to avoid repetition."""
+
+    def test_filler_rotation_avoids_repeats(self):
+        from mumble_voice_bot.brains.reactive import ReactiveBrain
+
+        brain = ReactiveBrain(fillers=["a", "b", "c", "d", "e", "f"])
+        seen = []
+        for _ in range(6):
+            filler = brain._pick_filler()
+            seen.append(filler)
+
+        # With 6 fillers and max_recent=5, first 5 should all be unique
+        assert len(set(seen[:5])) == 5
+
+    def test_filler_rotation_resets_when_exhausted(self):
+        from mumble_voice_bot.brains.reactive import ReactiveBrain
+
+        brain = ReactiveBrain(fillers=["a", "b", "c"])
+        brain._recent_max = 3
+        # Use all fillers
+        for _ in range(3):
+            brain._pick_filler()
+        # Should still work after all are used
+        result = brain._pick_filler()
+        assert result in ["a", "b", "c"]
+
+    def test_get_barge_in_ack(self):
+        from mumble_voice_bot.brains.reactive import ReactiveBrain
+
+        brain = ReactiveBrain()
+        ack = brain.get_barge_in_ack()
+        assert isinstance(ack, str)
+        assert len(ack) > 0
+
+
 class TestChannelActivityTracker:
     """Tests for ChannelActivityTracker."""
 

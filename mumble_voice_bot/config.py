@@ -184,6 +184,14 @@ class PipelineBotConfig:
     preserve_context_on_switch: bool = True  # Keep conversation history when switching souls
     max_preserved_messages: int = 10  # Maximum messages to preserve across switch
 
+    # Brain power - controls how often the bot uses the LLM vs. reactive responses
+    # 0.0 = pure reactive (never uses LLM), 1.0 = always uses LLM (default)
+    brain_power: float = 1.0
+
+    # Idle conversation initiation
+    idle_initiation_enabled: bool = False  # Trigger LLM response after channel goes quiet
+    idle_initiation_delay: float = 120.0  # Seconds of silence before initiating (2 minutes)
+
 
 @dataclass
 class STTConfig:
@@ -427,6 +435,7 @@ class SoulConfig:
     fallbacks: SoulFallbacks = field(default_factory=SoulFallbacks)
     events: SoulEvents = field(default_factory=SoulEvents)
     talks_to_bots: bool = False  # Whether to respond to other bots
+    brain_power: float | None = None  # Per-soul brain_power override (0.0-1.0)
 
 
 @dataclass
