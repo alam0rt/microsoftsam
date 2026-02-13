@@ -20,7 +20,7 @@ class TestSharedBotServices:
 
     def test_init_with_services(self):
         """Test initialization with provided services."""
-        from mumble_tts_bot import SharedBotServices
+        from mumble_voice_bot.coordination import SharedBotServices
 
         mock_tts = MagicMock()
         mock_stt = MagicMock()
@@ -41,7 +41,7 @@ class TestSharedBotServices:
 
     def test_init_empty(self):
         """Test initialization with no services."""
-        from mumble_tts_bot import SharedBotServices
+        from mumble_voice_bot.coordination import SharedBotServices
 
         services = SharedBotServices()
 
@@ -52,7 +52,7 @@ class TestSharedBotServices:
 
     def test_load_voice_caches(self, tmp_path):
         """Test that load_voice caches voice prompts."""
-        from mumble_tts_bot import SharedBotServices
+        from mumble_voice_bot.coordination import SharedBotServices
 
         # Create a fake audio file
         audio_file = tmp_path / "test.wav"
@@ -89,7 +89,7 @@ class TestSharedBotServices:
 
     def test_load_voice_creates_cache_file(self, tmp_path):
         """Test that voice loading creates a cache .pt file."""
-        from mumble_tts_bot import SharedBotServices
+        from mumble_voice_bot.coordination import SharedBotServices
 
         audio_file = tmp_path / "myvoice.wav"
         audio_file.write_bytes(b"fake audio data")
@@ -114,7 +114,7 @@ class TestSharedBotServices:
 
     def test_load_voice_uses_existing_cache(self, tmp_path):
         """Test that voice loading uses existing cache file."""
-        from mumble_tts_bot import SharedBotServices
+        from mumble_voice_bot.coordination import SharedBotServices
 
         # Create cache file directly
         voices_dir = tmp_path / "voices"
@@ -142,7 +142,7 @@ class TestSharedBotServices:
 
     def test_load_voice_no_tts_raises(self):
         """Test that loading voice without TTS raises error."""
-        from mumble_tts_bot import SharedBotServices
+        from mumble_voice_bot.coordination import SharedBotServices
 
         services = SharedBotServices(tts=None, device="cpu")
 
@@ -266,7 +266,7 @@ class TestEventJournal:
     def test_log_event_basic(self):
         """Test logging a basic event."""
 
-        from mumble_tts_bot import SharedBotServices
+        from mumble_voice_bot.coordination import SharedBotServices
 
         services = SharedBotServices()
         services.log_event("user_message", "sam", "hello world")
@@ -281,7 +281,7 @@ class TestEventJournal:
 
     def test_log_event_types(self):
         """Test different event types are stored correctly."""
-        from mumble_tts_bot import SharedBotServices
+        from mumble_voice_bot.coordination import SharedBotServices
 
         services = SharedBotServices()
         services.log_event("user_message", "sam", "hello")
@@ -298,7 +298,7 @@ class TestEventJournal:
 
     def test_journal_max_entries(self):
         """Test journal respects max entries limit."""
-        from mumble_tts_bot import SharedBotServices
+        from mumble_voice_bot.coordination import SharedBotServices
 
         services = SharedBotServices()
         # Default max is 50, add 60 events
@@ -310,7 +310,7 @@ class TestEventJournal:
 
     def test_get_recent_messages_for_llm(self):
         """Test formatting messages for LLM context."""
-        from mumble_tts_bot import SharedBotServices
+        from mumble_voice_bot.coordination import SharedBotServices
 
         services = SharedBotServices()
         services.log_event("user_message", "sam", "hello")
@@ -328,7 +328,7 @@ class TestEventJournal:
 
     def test_get_recent_messages_includes_text_messages(self):
         """Test text chat messages are included in LLM context."""
-        from mumble_tts_bot import SharedBotServices
+        from mumble_voice_bot.coordination import SharedBotServices
 
         services = SharedBotServices()
         services.log_event("user_message", "sam", "voice hello")
@@ -344,7 +344,7 @@ class TestEventJournal:
 
     def test_get_recent_messages_excludes_join_leave(self):
         """Test join/leave events are not in message list (but are in full journal)."""
-        from mumble_tts_bot import SharedBotServices
+        from mumble_voice_bot.coordination import SharedBotServices
 
         services = SharedBotServices()
         services.log_event("user_joined", "sam")
@@ -359,7 +359,7 @@ class TestEventJournal:
 
     def test_get_recent_messages_max_limit(self):
         """Test message limit is respected."""
-        from mumble_tts_bot import SharedBotServices
+        from mumble_voice_bot.coordination import SharedBotServices
 
         services = SharedBotServices()
         for i in range(30):
@@ -374,7 +374,7 @@ class TestEventJournal:
         """Test seconds_ago is calculated correctly."""
         import time
 
-        from mumble_tts_bot import SharedBotServices
+        from mumble_voice_bot.coordination import SharedBotServices
 
         services = SharedBotServices()
         services.log_event("user_message", "sam", "first")
@@ -388,7 +388,7 @@ class TestEventJournal:
 
     def test_journal_empty(self):
         """Test empty journal returns empty lists."""
-        from mumble_tts_bot import SharedBotServices
+        from mumble_voice_bot.coordination import SharedBotServices
 
         services = SharedBotServices()
 
@@ -399,7 +399,7 @@ class TestEventJournal:
         """Test journal is thread-safe."""
         import threading
 
-        from mumble_tts_bot import SharedBotServices
+        from mumble_voice_bot.coordination import SharedBotServices
 
         services = SharedBotServices()
         errors = []
@@ -443,7 +443,7 @@ class TestBotUtteranceHandling:
         import threading
         from unittest.mock import MagicMock
 
-        from mumble_tts_bot import SharedBotServices
+        from mumble_voice_bot.coordination import SharedBotServices
 
         bot = MagicMock()
         bot.user = "TestBot"
@@ -673,7 +673,7 @@ class TestBroadcastUtterance:
 
     def test_broadcast_logs_to_journal(self):
         """Test that broadcast_utterance logs to the event journal."""
-        from mumble_tts_bot import SharedBotServices
+        from mumble_voice_bot.coordination import SharedBotServices
 
         services = SharedBotServices()
         services.broadcast_utterance("Zapp", "Victory is mine!")
@@ -686,7 +686,7 @@ class TestBroadcastUtterance:
 
     def test_broadcast_notifies_listeners(self):
         """Test that broadcast_utterance notifies registered listeners."""
-        from mumble_tts_bot import SharedBotServices
+        from mumble_voice_bot.coordination import SharedBotServices
 
         services = SharedBotServices()
         received = []
@@ -702,7 +702,7 @@ class TestBroadcastUtterance:
 
     def test_broadcast_multiple_listeners(self):
         """Test broadcast notifies multiple listeners."""
-        from mumble_tts_bot import SharedBotServices
+        from mumble_voice_bot.coordination import SharedBotServices
 
         services = SharedBotServices()
         received1 = []
@@ -717,7 +717,7 @@ class TestBroadcastUtterance:
 
     def test_broadcast_listener_error_doesnt_break_others(self):
         """Test that a failing listener doesn't prevent others from receiving."""
-        from mumble_tts_bot import SharedBotServices
+        from mumble_voice_bot.coordination import SharedBotServices
 
         services = SharedBotServices()
         received = []
@@ -738,7 +738,7 @@ class TestBroadcastUtterance:
 
     def test_bot_messages_in_llm_context(self):
         """Test bot messages appear correctly in LLM context without bot_name."""
-        from mumble_tts_bot import SharedBotServices
+        from mumble_voice_bot.coordination import SharedBotServices
 
         services = SharedBotServices()
         services.log_event("user_message", "sam", "Hello bots!")
@@ -755,7 +755,7 @@ class TestBroadcastUtterance:
 
     def test_bot_messages_multi_bot_context(self):
         """Test that bots see each other's messages as user messages, not assistant."""
-        from mumble_tts_bot import SharedBotServices
+        from mumble_voice_bot.coordination import SharedBotServices
 
         services = SharedBotServices()
         services.log_event("user_message", "sam", "Hello bots!")

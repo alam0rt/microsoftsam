@@ -1,2 +1,0 @@
-mumble_tts_bot
-mumble_voice_bot

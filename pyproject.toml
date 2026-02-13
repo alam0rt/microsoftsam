@@ -66,13 +66,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=7.0",
-    "pytest-asyncio>=0.21",
-    "pytest-cov>=4.0",
-    "ruff>=0.4",
-    "mypy>=1.10",
-]
 # Streaming ASR providers (for low-latency speech recognition)
 nemotron = [
     "nemo_toolkit[asr]>=2.0.0",
@@ -92,7 +85,7 @@ wyoming-luxtts = "mumble_voice_bot.providers.wyoming_tts_server:main"
 
 [tool.setuptools]
 py-modules = ["mumble_tts_bot"]
-packages = ["mumble_voice_bot", "mumble_voice_bot.interfaces", "mumble_voice_bot.providers"]
+packages = ["mumble_voice_bot", "mumble_voice_bot.interfaces", "mumble_voice_bot.providers", "mumble_voice_bot.tools", "mumble_voice_bot.brains"]
 # Include vendored pymumble_py3 in the package path
 package-dir = {"pymumble_py3" = "vendor/botamusique/pymumble_py3"}
 
