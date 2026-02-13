@@ -176,3 +176,148 @@ class TestToolRegistry:
 
         registry.register(MockTool("tool2"))
         assert len(registry) == 2
+
+
+# =============================================================================
+# Phase 5/6: Rate limiting, allowlisting, audit logging
+# =============================================================================
+
+
+class TestToolAllowlisting:
+    """Tests for per-soul tool allowlisting."""
+
+    def test_allowlist_filters_definitions(self):
+        """Test that get_definitions respects allowlist."""
+        registry = ToolRegistry(allowed_tools=["tool1"])
+        registry.register(MockTool("tool1"))
+        registry.register(MockTool("tool2"))
+
+        defs = registry.get_definitions()
+        names = [d["function"]["name"] for d in defs]
+        assert "tool1" in names
+        assert "tool2" not in names
+
+    def test_no_allowlist_returns_all(self):
+        """Test that None allowlist returns all tools."""
+        registry = ToolRegistry()
+        registry.register(MockTool("tool1"))
+        registry.register(MockTool("tool2"))
+
+        defs = registry.get_definitions()
+        assert len(defs) == 2
+
+    @pytest.mark.asyncio
+    async def test_blocked_tool_returns_error(self):
+        """Test that executing a non-allowed tool returns an error."""
+        registry = ToolRegistry(allowed_tools=["tool1"])
+        registry.register(MockTool("tool1"))
+        registry.register(MockTool("tool2"))
+
+        result = await registry.execute("tool2", {"query": "test"})
+        assert "not allowed" in result
+
+    def test_set_allowed_tools(self):
+        """Test dynamic allowlist update."""
+        registry = ToolRegistry()
+        registry.register(MockTool("tool1"))
+        registry.register(MockTool("tool2"))
+
+        assert len(registry.get_definitions()) == 2
+
+        registry.set_allowed_tools(["tool1"])
+        assert len(registry.get_definitions()) == 1
+
+        registry.set_allowed_tools(None)
+        assert len(registry.get_definitions()) == 2
+
+
+class TestToolRateLimiting:
+    """Tests for per-user rate limiting."""
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_blocks_after_max(self):
+        """Test that rate limit blocks after max calls."""
+        registry = ToolRegistry(rate_limit_per_minute=3)
+        registry.register(MockTool("search"))
+
+        # First 3 should succeed
+        for i in range(3):
+            result = await registry.execute("search", {"query": f"test{i}"}, user_id="sam")
+            assert "mock result" in result
+
+        # 4th should be rate limited
+        result = await registry.execute("search", {"query": "test4"}, user_id="sam")
+        assert "Rate limit" in result
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_per_user(self):
+        """Test that rate limits are per-user."""
+        registry = ToolRegistry(rate_limit_per_minute=2)
+        registry.register(MockTool("search"))
+
+        # User A uses 2 calls
+        await registry.execute("search", {"query": "a1"}, user_id="alice")
+        await registry.execute("search", {"query": "a2"}, user_id="alice")
+
+        # User A is rate limited
+        result = await registry.execute("search", {"query": "a3"}, user_id="alice")
+        assert "Rate limit" in result
+
+        # User B is not affected
+        result = await registry.execute("search", {"query": "b1"}, user_id="bob")
+        assert "mock result" in result
+
+    @pytest.mark.asyncio
+    async def test_no_rate_limit_without_user_id(self):
+        """Test that rate limiting doesn't apply without user_id."""
+        registry = ToolRegistry(rate_limit_per_minute=1)
+        registry.register(MockTool("search"))
+
+        # Without user_id, no rate limiting
+        for i in range(5):
+            result = await registry.execute("search", {"query": f"test{i}"})
+            assert "mock result" in result
+
+
+class TestToolAuditLogging:
+    """Tests for tool invocation audit logging."""
+
+    @pytest.mark.asyncio
+    async def test_audit_log_records_calls(self):
+        """Test that audit log records tool invocations."""
+        registry = ToolRegistry()
+        registry.register(MockTool("search"))
+
+        await registry.execute("search", {"query": "test"}, user_id="sam")
+
+        log = registry.get_audit_log()
+        assert len(log) == 1
+        assert log[0]["tool"] == "search"
+        assert log[0]["user"] == "sam"
+        assert not log[0]["blocked"]
+        assert not log[0]["error"]
+
+    @pytest.mark.asyncio
+    async def test_audit_log_records_blocked(self):
+        """Test that audit log records blocked calls."""
+        registry = ToolRegistry(allowed_tools=["other"])
+        registry.register(MockTool("search"))
+
+        await registry.execute("search", {"query": "test"}, user_id="sam")
+
+        log = registry.get_audit_log()
+        assert len(log) == 1
+        assert log[0]["blocked"]
+
+    @pytest.mark.asyncio
+    async def test_audit_log_limit(self):
+        """Test audit log size limit."""
+        registry = ToolRegistry()
+        registry._audit_max_entries = 5
+        registry.register(MockTool("search"))
+
+        for i in range(10):
+            await registry.execute("search", {"query": f"test{i}"})
+
+        log = registry.get_audit_log()
+        assert len(log) == 5

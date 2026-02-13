@@ -254,38 +254,62 @@ class OpenAIChatLLM(LLMProvider):
 
         start_time = time.time()
 
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    self.endpoint,
-                    headers=headers,
-                    json=body,
-                    timeout=self.timeout,
-                )
-
-                # Log non-200 responses with full details before raising
-                if response.status_code != 200:
-                    try:
-                        error_body = response.text
-                    except Exception:
-                        error_body = "<unable to read response body>"
-                    logger.error(
-                        f"LLM API error: HTTP {response.status_code} from {self.endpoint}\n"
-                        f"Response headers: {dict(response.headers)}\n"
-                        f"Response body: {error_body[:2000]}"
+        # Retry with exponential backoff (max 2 retries for transient failures)
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        self.endpoint,
+                        headers=headers,
+                        json=body,
+                        timeout=self.timeout,
                     )
 
-                response.raise_for_status()
-                data = response.json()
-        except httpx.HTTPStatusError:
-            # Already logged above, re-raise with context
-            raise
-        except httpx.TimeoutException as e:
-            logger.error(f"LLM request timeout after {self.timeout}s to {self.endpoint}: {e}")
-            raise
-        except httpx.RequestError as e:
-            logger.error(f"LLM request failed to {self.endpoint}: {e}", exc_info=True)
-            raise
+                    # Log non-200 responses with full details before raising
+                    if response.status_code != 200:
+                        try:
+                            error_body = response.text
+                        except Exception:
+                            error_body = "<unable to read response body>"
+                        logger.error(
+                            f"LLM API error: HTTP {response.status_code} from {self.endpoint}\n"
+                            f"Response headers: {dict(response.headers)}\n"
+                            f"Response body: {error_body[:2000]}"
+                        )
+
+                        # Retry on 429 (rate limit) and 5xx (server errors)
+                        if response.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
+                            backoff = (2 ** attempt) * 0.5  # 0.5s, 1s
+                            logger.warning(f"LLM retry {attempt + 1}/{max_retries} after {backoff}s (HTTP {response.status_code})")
+                            import asyncio
+                            await asyncio.sleep(backoff)
+                            continue
+
+                    response.raise_for_status()
+                    data = response.json()
+                    break  # Success
+
+            except httpx.TimeoutException as e:
+                if attempt < max_retries:
+                    backoff = (2 ** attempt) * 0.5
+                    logger.warning(f"LLM retry {attempt + 1}/{max_retries} after {backoff}s (timeout)")
+                    import asyncio
+                    await asyncio.sleep(backoff)
+                    continue
+                logger.error(f"LLM request timeout after {self.timeout}s to {self.endpoint} ({max_retries + 1} attempts): {e}")
+                raise
+            except httpx.RequestError as e:
+                if attempt < max_retries:
+                    backoff = (2 ** attempt) * 0.5
+                    logger.warning(f"LLM retry {attempt + 1}/{max_retries} after {backoff}s (request error: {e})")
+                    import asyncio
+                    await asyncio.sleep(backoff)
+                    continue
+                logger.error(f"LLM request failed to {self.endpoint} ({max_retries + 1} attempts): {e}", exc_info=True)
+                raise
+            except httpx.HTTPStatusError:
+                raise  # Already logged above
 
         latency_ms = (time.time() - start_time) * 1000
 
