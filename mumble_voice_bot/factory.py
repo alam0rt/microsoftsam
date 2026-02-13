@@ -2,7 +2,7 @@
 
 This module is the single place that wires together:
 - SharedBotServices (TTS, STT, LLM)
-- Brain (LLM, Echo, Reactive, Adaptive)
+- Brain (LLM, Echo)
 - MumbleBot
 
 Entry points call these factories to construct the right bot from config.
@@ -125,15 +125,22 @@ def create_brain(
 ) -> Brain:
     """Create a Brain from configuration.
 
+    brain_type mapping:
+    - "llm" → LLMBrain(brain_power=1.0)  (always uses LLM)
+    - "adaptive" → LLMBrain(brain_power=configured)  (mixed routing)
+    - "reactive" → LLMBrain(brain_power=0.0)  (pure reactive, no LLM)
+    - "echo" → EchoBrain (voice cloning parrot)
+    - "null" → NullBrain
+
     Args:
         brain_type: One of "llm", "echo", "reactive", "adaptive", "null".
-        llm: LLM provider (required for "llm" and "adaptive").
+        llm: LLM provider (required for "llm", optional for "adaptive").
         bot_name: Bot display name (for journal context).
         shared_services: SharedBotServices (for journal, coordination).
         soul_config: SoulConfig for personality/events.
         system_prompt: LLM system prompt.
         tools_config: ToolsConfig for tool settings.
-        brain_power: AdaptiveBrain brain_power (0.0-1.0).
+        brain_power: brain_power for "adaptive" mode (0.0-1.0).
         tts: TTS engine (required for "echo" brain).
 
     Returns:
@@ -164,15 +171,22 @@ def create_brain(
         return EchoBrain(tts=tts)
 
     elif brain_type == "reactive":
-        from mumble_voice_bot.brains.reactive import ReactiveBrain
-        return ReactiveBrain(soul_config=soul_config)
+        # Pure reactive: LLMBrain with brain_power=0.0 (never calls LLM)
+        from mumble_voice_bot.brains.llm import LLMBrain
+        return LLMBrain(
+            llm=None,
+            bot_name=bot_name,
+            shared_services=shared_services,
+            soul_config=soul_config,
+            echo_filter=echo_filter,
+            utterance_classifier=utterance_classifier,
+            brain_power=0.0,
+        )
 
     elif brain_type == "adaptive":
-        from mumble_voice_bot.brains.adaptive import AdaptiveBrain
+        # Mixed mode: LLMBrain with configurable brain_power
         from mumble_voice_bot.brains.llm import LLMBrain
-        from mumble_voice_bot.brains.reactive import ReactiveBrain
-
-        llm_brain = LLMBrain(
+        return LLMBrain(
             llm=llm,
             bot_name=bot_name,
             shared_services=shared_services,
@@ -182,14 +196,7 @@ def create_brain(
             utterance_classifier=utterance_classifier,
             system_prompt=system_prompt,
             talks_to_bots=getattr(soul_config, 'talks_to_bots', False) if soul_config else False,
-        )
-        reactive_brain = ReactiveBrain(soul_config=soul_config)
-
-        return AdaptiveBrain(
-            llm_brain=llm_brain,
-            reactive_brain=reactive_brain,
             brain_power=brain_power,
-            bot_name=bot_name,
         )
 
     else:  # Default: "llm"
@@ -209,6 +216,7 @@ def create_brain(
             utterance_classifier=utterance_classifier,
             system_prompt=system_prompt,
             talks_to_bots=getattr(soul_config, 'talks_to_bots', False) if soul_config else False,
+            brain_power=1.0,
         )
 
 

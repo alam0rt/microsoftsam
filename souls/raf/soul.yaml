@@ -6,6 +6,7 @@ description: "A Magic: The Gathering enthusiast who works with wood and has a do
 author: "sam"
 version: "1.0.0"
 talks_to_bots: true
+brain_power: 0.2
 
 # Voice settings (TTS)
 voice:

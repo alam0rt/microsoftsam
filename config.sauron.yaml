@@ -33,7 +33,7 @@ shared:
     nemotron_device: "cuda"
 
   tts:
-    num_steps: 4
+    num_steps: 6
     device: "cuda"
 
 # Bot-to-bot interaction settings

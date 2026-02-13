@@ -1,10 +1,9 @@
 """Pluggable brain implementations for the Mumble Voice Bot.
 
 Each brain determines how the bot responds to utterances:
+- LLMBrain: Unified brain with LLM intelligence and reactive fallbacks.
+  brain_power controls the mix (1.0=always LLM, 0.0=pure reactive).
 - EchoBrain: Clone speaker voice, echo transcript (parrot)
-- LLMBrain: Full LLM-powered responses with tool calling
-- ReactiveBrain: Fillers, echo fragments, deflections (no LLM)
-- AdaptiveBrain: Routes between LLMBrain and ReactiveBrain based on brain_power
 - NullBrain: Never responds (transcribe-only mode) -- defined in interfaces/brain.py
 """
 

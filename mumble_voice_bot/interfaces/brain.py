@@ -5,10 +5,9 @@ handles all I/O (Mumble connection, VAD, ASR, TTS playback), and the
 Brain decides what to say given a complete utterance.
 
 Brain implementations:
+- LLMBrain: Unified brain with LLM intelligence and reactive fallbacks.
+  brain_power controls the mix (1.0=always LLM, 0.0=pure reactive).
 - EchoBrain: Clone speaker voice, echo transcript back (parrot)
-- LLMBrain: Speech filter -> LLM -> tool loop -> response (full intelligence)
-- ReactiveBrain: Fillers, echo fragments, deflections (no LLM)
-- AdaptiveBrain: Score utterance -> delegate to LLMBrain or ReactiveBrain
 - NullBrain: Always returns None (transcribe-only monitoring)
 """
 

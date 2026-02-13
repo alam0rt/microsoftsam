@@ -4,9 +4,9 @@ Tests cover:
 - Brain protocol compliance
 - NullBrain (always silent)
 - EchoBrain (voice cloning + echo)
-- ReactiveBrain (fillers, echo fragments, deflections)
-- AdaptiveBrain (brain_power routing)
-- LLMBrain (basic construction)
+- LLMBrain reactive mode (fillers, echo fragments, deflections)
+- LLMBrain brain_power routing (utterance scoring, force-think)
+- LLMBrain filler rotation
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -163,17 +163,17 @@ class TestEchoBrain:
 
 
 # =============================================================================
-# ReactiveBrain
+# LLMBrain reactive mode (brain_power=0.0)
 # =============================================================================
 
 
 class TestReactiveBrain:
-    """Tests for ReactiveBrain (no LLM)."""
+    """Tests for LLMBrain in pure reactive mode (brain_power=0.0)."""
 
     def test_sometimes_responds(self):
-        from mumble_voice_bot.brains.reactive import ReactiveBrain
+        from mumble_voice_bot.brains.llm import LLMBrain
 
-        brain = ReactiveBrain(silence_weight=0.0)  # Never silent
+        brain = LLMBrain(brain_power=0.0, silence_weight=0.0)  # Never silent
         u = Utterance(text="hello world", user_id=1, user_name="sam")
 
         # Should always respond when silence_weight is 0
@@ -183,18 +183,18 @@ class TestReactiveBrain:
         assert result.skip_broadcast
 
     def test_silence_at_high_weight(self):
-        from mumble_voice_bot.brains.reactive import ReactiveBrain
+        from mumble_voice_bot.brains.llm import LLMBrain
 
-        brain = ReactiveBrain(silence_weight=1.0)  # Always silent
+        brain = LLMBrain(brain_power=0.0, silence_weight=1.0)  # Always silent
         u = Utterance(text="hello world", user_id=1, user_name="sam")
 
         result = brain.process(u)
         assert result is None
 
     def test_question_gets_special_treatment(self):
-        from mumble_voice_bot.brains.reactive import ReactiveBrain
+        from mumble_voice_bot.brains.llm import LLMBrain
 
-        brain = ReactiveBrain(silence_weight=0.0)
+        brain = LLMBrain(brain_power=0.0, silence_weight=0.0)
         u = Utterance(text="what time is it?", user_id=1, user_name="sam", is_question=True)
 
         # Should respond to questions
@@ -202,97 +202,95 @@ class TestReactiveBrain:
         assert result is not None
 
     def test_echo_fragment_extraction(self):
-        from mumble_voice_bot.brains.reactive import ReactiveBrain
+        from mumble_voice_bot.brains.llm import LLMBrain
 
-        brain = ReactiveBrain()
+        brain = LLMBrain(brain_power=0.0)
         fragment = brain._echo_fragment("I went to the store yesterday")
         assert fragment is not None
         assert "yesterday" in fragment or "store" in fragment
 
     def test_echo_fragment_too_short(self):
-        from mumble_voice_bot.brains.reactive import ReactiveBrain
+        from mumble_voice_bot.brains.llm import LLMBrain
 
-        brain = ReactiveBrain()
+        brain = LLMBrain(brain_power=0.0)
         fragment = brain._echo_fragment("hi")
         assert fragment is None
 
     def test_stalling_echo(self):
-        from mumble_voice_bot.brains.reactive import ReactiveBrain
+        from mumble_voice_bot.brains.llm import LLMBrain
 
-        brain = ReactiveBrain()
+        brain = LLMBrain(brain_power=0.0)
         stall = brain._stalling_echo("how does this thing work anyway")
         assert stall is not None
         assert "how does" in stall
 
     def test_get_thinking_stall(self):
-        from mumble_voice_bot.brains.reactive import ReactiveBrain
+        from mumble_voice_bot.brains.llm import LLMBrain
 
-        brain = ReactiveBrain()
+        brain = LLMBrain(brain_power=0.0)
         stall = brain.get_thinking_stall()
         assert isinstance(stall, str)
         assert len(stall) > 0
 
-    def test_ignores_bots(self):
-        from mumble_voice_bot.brains.reactive import ReactiveBrain
+    def test_ignores_bots_at_low_power(self):
+        from mumble_voice_bot.brains.llm import LLMBrain
 
-        brain = ReactiveBrain()
+        brain = LLMBrain(brain_power=0.0)
         assert brain.on_bot_utterance("other", "hello") is None
 
-    def test_ignores_text(self):
-        from mumble_voice_bot.brains.reactive import ReactiveBrain
+    def test_ignores_text_without_llm(self):
+        from mumble_voice_bot.brains.llm import LLMBrain
 
-        brain = ReactiveBrain()
+        brain = LLMBrain(brain_power=0.0)
         assert brain.on_text_message("sender", "hello") is None
 
 
 # =============================================================================
-# AdaptiveBrain
+# LLMBrain brain_power routing
 # =============================================================================
 
 
 class TestAdaptiveBrain:
-    """Tests for AdaptiveBrain (brain_power routing)."""
+    """Tests for LLMBrain brain_power routing."""
 
     def test_always_thinks_at_power_1(self):
-        from mumble_voice_bot.brains.adaptive import AdaptiveBrain
+        from mumble_voice_bot.brains.llm import LLMBrain
 
-        llm = MagicMock()
-        llm.process.return_value = BotResponse(text="thought response")
-        reactive = MagicMock()
-        reactive.process.return_value = BotResponse(text="reactive response")
+        mock_llm = AsyncMock()
+        mock_llm.chat = AsyncMock(return_value=MagicMock(
+            content="thought response", has_tool_calls=False, tool_calls=[],
+        ))
 
-        brain = AdaptiveBrain(llm_brain=llm, reactive_brain=reactive, brain_power=1.0)
+        brain = LLMBrain(llm=mock_llm, bot_name="TestBot", brain_power=1.0)
         u = Utterance(text="hello", user_id=1, user_name="sam")
 
         result = brain.process(u)
         assert result is not None
-        llm.process.assert_called_once()
-        reactive.process.assert_not_called()
+        assert result.text == "thought response"
+        mock_llm.chat.assert_called_once()
 
     def test_never_thinks_at_power_0(self):
-        from mumble_voice_bot.brains.adaptive import AdaptiveBrain
+        from mumble_voice_bot.brains.llm import LLMBrain
 
-        llm = MagicMock()
-        reactive = MagicMock()
-        reactive.process.return_value = BotResponse(text="reactive", is_filler=True)
-
-        brain = AdaptiveBrain(llm_brain=llm, reactive_brain=reactive, brain_power=0.0)
-        u = Utterance(text="hello", user_id=1, user_name="sam")
+        mock_llm = AsyncMock()
+        brain = LLMBrain(llm=mock_llm, brain_power=0.0, silence_weight=0.0)
+        u = Utterance(text="hello world", user_id=1, user_name="sam")
 
         brain.process(u)
-        llm.process.assert_not_called()
+        mock_llm.chat.assert_not_called()
 
     def test_force_think_on_direct_question(self):
-        from mumble_voice_bot.brains.adaptive import AdaptiveBrain
+        from mumble_voice_bot.brains.llm import LLMBrain
 
-        llm = MagicMock()
-        llm.process.return_value = BotResponse(text="answer")
-        reactive = MagicMock()
+        mock_llm = AsyncMock()
+        mock_llm.chat = AsyncMock(return_value=MagicMock(
+            content="answer", has_tool_calls=False, tool_calls=[],
+        ))
 
-        brain = AdaptiveBrain(
-            llm_brain=llm, reactive_brain=reactive,
-            brain_power=0.1,  # Very low
+        brain = LLMBrain(
+            llm=mock_llm,
             bot_name="TestBot",
+            brain_power=0.1,  # Very low
         )
         u = Utterance(
             text="TestBot what time is it?", user_id=1, user_name="sam",
@@ -300,35 +298,29 @@ class TestAdaptiveBrain:
         )
 
         result = brain.process(u)
-        llm.process.assert_called_once()
+        mock_llm.chat.assert_called_once()
 
     def test_override_brain_power(self):
-        from mumble_voice_bot.brains.adaptive import AdaptiveBrain
+        from mumble_voice_bot.brains.llm import LLMBrain
 
-        llm = MagicMock()
-        reactive = MagicMock()
-        reactive.process.return_value = BotResponse(text="reactive", is_filler=True)
-
-        brain = AdaptiveBrain(llm_brain=llm, reactive_brain=reactive, brain_power=1.0)
+        mock_llm = AsyncMock()
+        brain = LLMBrain(llm=mock_llm, brain_power=1.0, silence_weight=0.0)
         assert brain.effective_brain_power == 1.0
 
         brain.set_override(0.0)
         assert brain.effective_brain_power == 0.0
 
-        u = Utterance(text="hello", user_id=1, user_name="sam")
+        u = Utterance(text="hello world", user_id=1, user_name="sam")
         brain.process(u)
-        llm.process.assert_not_called()
+        mock_llm.chat.assert_not_called()
 
         brain.set_override(None)
         assert brain.effective_brain_power == 1.0
 
     def test_urgency_scoring(self):
-        from mumble_voice_bot.brains.adaptive import AdaptiveBrain
+        from mumble_voice_bot.brains.llm import LLMBrain
 
-        brain = AdaptiveBrain(
-            llm_brain=MagicMock(), reactive_brain=MagicMock(),
-            brain_power=0.5,
-        )
+        brain = LLMBrain(brain_power=0.5)
 
         # Low urgency
         u_low = Utterance(text="yeah ok", user_id=1, user_name="sam")
@@ -346,16 +338,18 @@ class TestAdaptiveBrain:
         assert 0.0 <= score_low <= 1.0
         assert 0.0 <= score_high <= 1.0
 
-    def test_text_messages_go_to_llm(self):
-        from mumble_voice_bot.brains.adaptive import AdaptiveBrain
+    def test_text_messages_use_llm(self):
+        from mumble_voice_bot.brains.llm import LLMBrain
 
-        llm = MagicMock()
-        llm.on_text_message.return_value = BotResponse(text="response")
-        reactive = MagicMock()
+        mock_llm = AsyncMock()
+        mock_llm.chat = AsyncMock(return_value=MagicMock(
+            content="response", has_tool_calls=False, tool_calls=[],
+        ))
 
-        brain = AdaptiveBrain(llm_brain=llm, reactive_brain=reactive, brain_power=0.0)
+        brain = LLMBrain(llm=mock_llm, brain_power=0.0)
         result = brain.on_text_message("sender", "hello")
-        llm.on_text_message.assert_called_once()
+        # Text messages always use LLM regardless of brain_power
+        mock_llm.chat.assert_called_once()
 
 
 # =============================================================================
@@ -475,9 +469,9 @@ class TestReactiveBrainFillerRotation:
     """Tests for filler rotation to avoid repetition."""
 
     def test_filler_rotation_avoids_repeats(self):
-        from mumble_voice_bot.brains.reactive import ReactiveBrain
+        from mumble_voice_bot.brains.llm import LLMBrain
 
-        brain = ReactiveBrain(fillers=["a", "b", "c", "d", "e", "f"])
+        brain = LLMBrain(brain_power=0.0, fillers=["a", "b", "c", "d", "e", "f"])
         seen = []
         for _ in range(6):
             filler = brain._pick_filler()
@@ -487,9 +481,9 @@ class TestReactiveBrainFillerRotation:
         assert len(set(seen[:5])) == 5
 
     def test_filler_rotation_resets_when_exhausted(self):
-        from mumble_voice_bot.brains.reactive import ReactiveBrain
+        from mumble_voice_bot.brains.llm import LLMBrain
 
-        brain = ReactiveBrain(fillers=["a", "b", "c"])
+        brain = LLMBrain(brain_power=0.0, fillers=["a", "b", "c"])
         brain._recent_max = 3
         # Use all fillers
         for _ in range(3):
@@ -499,9 +493,9 @@ class TestReactiveBrainFillerRotation:
         assert result in ["a", "b", "c"]
 
     def test_get_barge_in_ack(self):
-        from mumble_voice_bot.brains.reactive import ReactiveBrain
+        from mumble_voice_bot.brains.llm import LLMBrain
 
-        brain = ReactiveBrain()
+        brain = LLMBrain(brain_power=0.0)
         ack = brain.get_barge_in_ack()
         assert isinstance(ack, str)
         assert len(ack) > 0
