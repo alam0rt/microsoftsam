@@ -184,8 +184,13 @@ class PipelineBotConfig:
     preserve_context_on_switch: bool = True  # Keep conversation history when switching souls
     max_preserved_messages: int = 10  # Maximum messages to preserve across switch
 
+    # Brain configuration
+    # brain_type: Which brain to use ("llm", "echo", "reactive", "adaptive")
+    brain_type: str = "llm"
+
     # Brain power - controls how often the bot uses the LLM vs. reactive responses
     # 0.0 = pure reactive (never uses LLM), 1.0 = always uses LLM (default)
+    # Only used when brain_type is "adaptive"
     brain_power: float = 1.0
 
     # Idle conversation initiation

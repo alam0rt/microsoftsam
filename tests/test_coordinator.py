@@ -153,61 +153,52 @@ class TestSharedBotServices:
             )
 
 
-# --- MumbleVoiceBot Shared Services Tests ---
+# --- MumbleBot Shared Services Tests ---
+# (Migrated from MumbleVoiceBot monolith to MumbleBot base class)
 
 
 class TestMumbleVoiceBotSharedServices:
-    """Tests for MumbleVoiceBot with shared services."""
+    """Tests for MumbleBot with shared services."""
 
     def test_bot_accepts_shared_tts(self):
         """Test that bot accepts shared TTS."""
-        # We can't fully test without a real Mumble server,
-        # but we can verify the parameter is accepted
-        from mumble_tts_bot import MumbleVoiceBot
+        from mumble_voice_bot.bot import MumbleBot
+        from mumble_voice_bot.coordination import SharedBotServices
 
         mock_tts = MagicMock()
-        mock_tts.generate_speech_streaming = MagicMock(return_value=iter([]))
         mock_stt = MagicMock()
 
-        # This should not raise
-        with patch('mumble_tts_bot.pymumble.Mumble'):
-            with patch.object(MumbleVoiceBot, '_load_reference_voice'):
-                with patch.object(MumbleVoiceBot, '_init_speech_filters'):
-                    with patch.object(MumbleVoiceBot, '_init_tools'):
-                        with patch.object(MumbleVoiceBot, '_init_event_system'):
-                            bot = MumbleVoiceBot(
-                                host="localhost",
-                                user="TestBot",
-                                shared_tts=mock_tts,
-                                shared_stt=mock_stt,
-                                voice_prompt={"embedding": torch.randn(1, 256)},
-                            )
+        bot = MumbleBot(
+            host="localhost",
+            user="TestBot",
+            tts=mock_tts,
+            stt=mock_stt,
+            voice_prompt={"embedding": torch.randn(1, 256)},
+        )
 
-                            assert bot.tts is mock_tts
-                            assert bot._owns_tts is False
+        assert bot.tts is mock_tts
 
     def test_bot_accepts_shared_llm(self):
-        """Test that bot accepts shared LLM."""
-        from mumble_tts_bot import MumbleVoiceBot
+        """Test that bot accepts shared services with LLM."""
+        from mumble_voice_bot.bot import MumbleBot
+        from mumble_voice_bot.coordination import SharedBotServices
 
-        mock_llm = MagicMock()
+        mock_tts = MagicMock()
         mock_stt = MagicMock()
+        mock_llm = MagicMock()
 
-        with patch('mumble_tts_bot.pymumble.Mumble'):
-            with patch.object(MumbleVoiceBot, '_load_reference_voice'):
-                with patch.object(MumbleVoiceBot, '_init_speech_filters'):
-                    with patch.object(MumbleVoiceBot, '_init_tools'):
-                        with patch.object(MumbleVoiceBot, '_init_event_system'):
-                            with patch('mumble_tts_bot.StreamingLuxTTS'):
-                                bot = MumbleVoiceBot(
-                                    host="localhost",
-                                    user="TestBot",
-                                    shared_llm=mock_llm,
-                                    shared_stt=mock_stt,
-                                )
+        shared = SharedBotServices(tts=mock_tts, stt=mock_stt, llm=mock_llm)
 
-                                assert bot.llm is mock_llm
-                                assert bot._owns_llm is False
+        bot = MumbleBot(
+            host="localhost",
+            user="TestBot",
+            tts=mock_tts,
+            stt=mock_stt,
+            shared_services=shared,
+        )
+
+        assert bot._shared_services is shared
+        assert bot._shared_services.llm is mock_llm
 
 
 # --- Multi-Persona Config Tests ---
@@ -435,169 +426,140 @@ class TestEventJournal:
 
 
 class TestBotUtteranceHandling:
-    """Tests for bot-to-bot utterance handling and talks_to_bots feature."""
+    """Tests for bot-to-bot utterance handling via MumbleBot + Brain.
 
-    @pytest.fixture
-    def mock_bot(self):
-        """Create a mock bot with minimal required attributes."""
-        import threading
-        from unittest.mock import MagicMock
+    Migrated from monolith (MumbleVoiceBot._on_bot_utterance) to
+    MumbleBot._on_bot_utterance which delegates to Brain.on_bot_utterance.
+    """
 
-        from mumble_voice_bot.coordination import SharedBotServices
+    def _make_bot(self, user="TestBot", brain=None):
+        """Create a MumbleBot for testing."""
+        from mumble_voice_bot.bot import MumbleBot
+        from mumble_voice_bot.interfaces.brain import NullBrain
 
-        bot = MagicMock()
-        bot.user = "TestBot"
-        bot.logger = MagicMock()
-        bot._speaking = threading.Event()
-        bot._shared_services = SharedBotServices()
-        bot.pending_text = {}
-        bot.pending_text_time = {}
-        bot.soul_config = None
-        return bot
+        return MumbleBot(
+            host="localhost",
+            user=user,
+            brain=brain or NullBrain(),
+            tts=MagicMock(),
+            stt=MagicMock(),
+        )
 
-    @pytest.fixture
-    def soul_config_talks_to_bots(self):
-        """Create a SoulConfig with talks_to_bots enabled."""
-        from mumble_voice_bot.config import SoulConfig
-        return SoulConfig(name="TalkativeBot", talks_to_bots=True)
-
-    @pytest.fixture
-    def soul_config_no_talk(self):
-        """Create a SoulConfig with talks_to_bots disabled (default)."""
-        from mumble_voice_bot.config import SoulConfig
-        return SoulConfig(name="QuietBot", talks_to_bots=False)
-
-    def test_ignores_own_utterances(self, mock_bot):
+    def test_ignores_own_utterances(self):
         """Test that bot ignores its own broadcast utterances."""
-        from mumble_tts_bot import MumbleVoiceBot
+        brain = MagicMock()
+        bot = self._make_bot(user="Zapp", brain=brain)
 
-        # Call the method directly on a mock
-        mock_bot.user = "Zapp"
-        MumbleVoiceBot._on_bot_utterance(mock_bot, "Zapp", "Hello there friend!")
+        bot._on_bot_utterance("Zapp", "Hello there friend!")
 
-        # Should not log anything or process (ignores own utterances)
-        assert "Zapp" not in str(mock_bot.logger.info.call_args_list)
+        # Should not call brain (ignores own utterances)
+        brain.on_bot_utterance.assert_not_called()
 
-    def test_ignores_short_utterances(self, mock_bot):
-        """Test that bot ignores very short utterances (fillers)."""
-        from mumble_tts_bot import MumbleVoiceBot
+    def test_ignores_short_utterances(self):
+        """Test that brain receives utterances from other bots.
 
-        mock_bot.user = "Raf"
-        # Short utterances (< 3 words) should be ignored as likely fillers
-        MumbleVoiceBot._on_bot_utterance(mock_bot, "Zapp", "Hmm...")
-        MumbleVoiceBot._on_bot_utterance(mock_bot, "Zapp", "Hello!")
-        MumbleVoiceBot._on_bot_utterance(mock_bot, "Zapp", "Let me...")
+        Note: In the new architecture, MumbleBot passes ALL non-self
+        utterances to the brain. Short utterance filtering is the brain's
+        responsibility (e.g., LLMBrain filters short utterances).
+        """
+        brain = MagicMock()
+        brain.on_bot_utterance.return_value = None  # Brain stays silent
+        bot = self._make_bot(user="Raf", brain=brain)
 
-        # Should NOT log [BOT-HEARD] with info level (only debug)
-        call_str = str(mock_bot.logger.info.call_args_list)
-        assert "[BOT-HEARD]" not in call_str or "ignoring" not in call_str
-        # Should log with debug level instead
-        assert mock_bot.logger.debug.called
+        bot._on_bot_utterance("Zapp", "Hmm...")
 
-    def test_logs_heard_utterance(self, mock_bot):
-        """Test that hearing another bot is logged."""
-        from mumble_tts_bot import MumbleVoiceBot
+        # MumbleBot forwards to brain; brain decides what to do
+        brain.on_bot_utterance.assert_called_once_with("Zapp", "Hmm...")
 
-        mock_bot.user = "Raf"
-        # Note: Utterance must be 3+ words to pass the short utterance filter
-        MumbleVoiceBot._on_bot_utterance(mock_bot, "Zapp", "Greetings my friend!")
+    def test_logs_heard_utterance(self):
+        """Test that hearing another bot routes to brain."""
+        brain = MagicMock()
+        brain.on_bot_utterance.return_value = None
+        bot = self._make_bot(user="Raf", brain=brain)
 
-        mock_bot.logger.info.assert_called()
-        call_str = str(mock_bot.logger.info.call_args_list)
-        assert "BOT-HEARD" in call_str
-        assert "Zapp" in call_str
+        bot._on_bot_utterance("Zapp", "Greetings my friend!")
 
-    def test_no_response_without_talks_to_bots(self, mock_bot, soul_config_no_talk):
-        """Test that bot does not respond when talks_to_bots is False."""
+        brain.on_bot_utterance.assert_called_once_with("Zapp", "Greetings my friend!")
 
-        from mumble_tts_bot import MumbleVoiceBot
+    def test_no_response_without_talks_to_bots(self):
+        """Test that NullBrain does not respond to other bots."""
+        from mumble_voice_bot.interfaces.brain import NullBrain
 
-        mock_bot.soul_config = soul_config_no_talk
-        mock_bot.user = "Raf"
-        # Note: Utterance must be 3+ words to pass the short utterance filter
-        MumbleVoiceBot._on_bot_utterance(mock_bot, "Zapp", "Hello there Raf!")
+        bot = self._make_bot(user="Raf", brain=NullBrain())
 
-        # Should log that we heard it
-        mock_bot.logger.info.assert_called()
+        with patch.object(bot, '_speak_response') as mock_speak:
+            bot._on_bot_utterance("Zapp", "Hello there Raf!")
+            mock_speak.assert_not_called()
 
-        # Should NOT add to pending_text (no response queued)
-        assert len(mock_bot.pending_text) == 0
+    def test_no_response_without_soul_config(self):
+        """Test that brain with no talks_to_bots returns None."""
+        from mumble_voice_bot.brains.llm import LLMBrain
 
-    def test_no_response_without_soul_config(self, mock_bot):
-        """Test that bot does not respond when soul_config is None."""
-        from mumble_tts_bot import MumbleVoiceBot
+        brain = LLMBrain(
+            llm=MagicMock(), bot_name="Raf",
+            talks_to_bots=False,
+        )
+        bot = self._make_bot(user="Raf", brain=brain)
 
-        mock_bot.soul_config = None
-        mock_bot.user = "Raf"
-        # Note: Utterance must be 3+ words to pass the short utterance filter
-        MumbleVoiceBot._on_bot_utterance(mock_bot, "Zapp", "Hello there friend!")
+        with patch.object(bot, '_speak_response') as mock_speak:
+            bot._on_bot_utterance("Zapp", "Hello there friend!")
+            mock_speak.assert_not_called()
 
-        # Should NOT add to pending_text
-        assert len(mock_bot.pending_text) == 0
+    def test_queues_response_with_talks_to_bots(self):
+        """Test that brain with talks_to_bots produces a response."""
+        from mumble_voice_bot.interfaces.brain import BotResponse
 
-    def test_queues_response_with_talks_to_bots(self, mock_bot, soul_config_talks_to_bots):
-        """Test that bot queues response when talks_to_bots is True."""
+        brain = MagicMock()
+        brain.on_bot_utterance.return_value = BotResponse(text="Hey Zapp!")
+        bot = self._make_bot(user="Raf", brain=brain)
 
-        from mumble_tts_bot import MumbleVoiceBot
+        with patch.object(bot, '_speak_response') as mock_speak:
+            bot._on_bot_utterance("Zapp", "Hello there Raf!")
+            # The response is queued after waiting for speaker to finish
+            # In tests, SharedBotServices.any_bot_speaking() returns False immediately
+            import time as time_mod
+            time_mod.sleep(0.2)  # Give thread time to execute
+            mock_speak.assert_called_once()
+            response = mock_speak.call_args[0][0]
+            assert response.text == "Hey Zapp!"
 
-        mock_bot.soul_config = soul_config_talks_to_bots
-        mock_bot.user = "Raf"
-        mock_bot._speaking.clear()  # Not speaking
-        # Note: Utterance must be 3+ words to pass the short utterance filter
-        MumbleVoiceBot._on_bot_utterance(mock_bot, "Zapp", "Hello there Raf!")
+    def test_no_response_while_speaking(self):
+        """Test that bot does not respond while already speaking."""
+        from mumble_voice_bot.interfaces.brain import BotResponse
 
-        # Should add to pending_text (response will be attempted)
-        # Note: The actual response happens in a background thread after a delay
-        # so we can't immediately check pending_text. Instead we verify the
-        # method doesn't crash and logs appropriately.
-        # The pending_text is set in the delayed_respond thread.
-        import time as time_mod
-        time_mod.sleep(0.1)  # Give thread time to start
-        # The thread is running - just verify it was started
-        mock_bot.logger.info.assert_called()
+        brain = MagicMock()
+        brain.on_bot_utterance.return_value = BotResponse(text="response")
+        bot = self._make_bot(user="Raf", brain=brain)
+        bot._speaking.set()  # Currently speaking
 
-    def test_no_response_while_speaking(self, mock_bot, soul_config_talks_to_bots):
-        """Test that bot does not queue response while speaking."""
-        from mumble_tts_bot import MumbleVoiceBot
+        with patch.object(bot, '_speak_response') as mock_speak:
+            bot._on_bot_utterance("Zapp", "Hello there friend!")
+            import time as time_mod
+            time_mod.sleep(0.2)
+            mock_speak.assert_not_called()
 
-        mock_bot.soul_config = soul_config_talks_to_bots
-        mock_bot.user = "Raf"
-        mock_bot._speaking.set()  # Currently speaking
-        # Note: Utterance must be 3+ words to pass the short utterance filter
-        MumbleVoiceBot._on_bot_utterance(mock_bot, "Zapp", "Hello there friend!")
+    def test_long_text_truncated_in_log(self):
+        """Test that long utterances from other bots are handled."""
+        brain = MagicMock()
+        brain.on_bot_utterance.return_value = None
+        bot = self._make_bot(user="Raf", brain=brain)
 
-        # Should NOT add to pending_text (we're speaking)
-        assert len(mock_bot.pending_text) == 0
+        long_text = "This is a very long message " * 10
 
-    def test_long_text_truncated_in_log(self, mock_bot):
-        """Test that long utterances are truncated in log messages."""
-        from mumble_tts_bot import MumbleVoiceBot
+        bot._on_bot_utterance("Zapp", long_text)
 
-        mock_bot.user = "Raf"
-        # Note: Text must be 3+ words to pass short utterance filter
-        # Use multiple words to make it long enough
-        long_text = "This is a very long message " * 10  # ~280 characters, 70 words
+        # Brain should receive the full text
+        brain.on_bot_utterance.assert_called_once_with("Zapp", long_text)
 
-        MumbleVoiceBot._on_bot_utterance(mock_bot, "Zapp", long_text)
+    def test_short_text_not_truncated_in_log(self):
+        """Test that short utterances from other bots are handled."""
+        brain = MagicMock()
+        brain.on_bot_utterance.return_value = None
+        bot = self._make_bot(user="Raf", brain=brain)
 
-        call_str = str(mock_bot.logger.info.call_args_list)
-        assert "..." in call_str  # Should be truncated
-        assert "This is a very long message" in call_str  # First part should be there
+        bot._on_bot_utterance("Zapp", "Hello there friend!")
 
-    def test_short_text_not_truncated_in_log(self, mock_bot):
-        """Test that short utterances (3+ words) are not truncated in log."""
-        from mumble_tts_bot import MumbleVoiceBot
-
-        mock_bot.user = "Raf"
-        # Note: Must be 3+ words to pass filter, but short enough to not truncate
-        short_text = "Hello there friend!"
-
-        MumbleVoiceBot._on_bot_utterance(mock_bot, "Zapp", short_text)
-
-        call_str = str(mock_bot.logger.info.call_args_list)
-        # Should NOT have truncation ellipsis (text is short enough)
-        # But we still check the text appears
-        assert "Hello there friend!" in call_str
+        brain.on_bot_utterance.assert_called_once_with("Zapp", "Hello there friend!")
 
 
 class TestSoulConfigTalksToBots:

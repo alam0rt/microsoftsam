@@ -216,11 +216,11 @@ class TestFillerBroadcast:
     def test_speak_sync_has_skip_broadcast_parameter(self):
         """_speak_sync should accept skip_broadcast parameter."""
         # This tests that the function signature is correct
-        # Check the source file directly
+        # Check the MumbleBot base class (migrated from mumble_tts_bot.py)
         import ast
         from pathlib import Path
 
-        bot_file = Path(__file__).parent.parent / "mumble_tts_bot.py"
+        bot_file = Path(__file__).parent.parent / "mumble_voice_bot" / "bot.py"
         source = bot_file.read_text()
 
         # Parse and find the _speak_sync method

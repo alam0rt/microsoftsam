@@ -1,5 +1,11 @@
 """Voice pipeline orchestration for Mumble Voice Bot.
 
+.. deprecated::
+    This batch pipeline is superseded by ``MumbleBot`` in ``bot.py`` which
+    implements the composable Brain architecture with streaming TTS. This
+    module is retained for backward compatibility and potential "simple mode"
+    use. New code should use ``MumbleBot`` with a ``Brain`` implementation.
+
 The pipeline coordinates:
 1. Speech-to-Text (Whisper) - transcribe incoming audio
 2. LLM (Thinking) - generate response from transcription

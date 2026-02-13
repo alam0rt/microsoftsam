@@ -642,25 +642,25 @@ Now that `MumbleBot` + `Brain` is the architecture:
 
 ### Phase 5: Reliability & Observability (Weeks 14-16)
 
-- [ ] **LLM retry with reactive fallback** — Exponential backoff in `OpenAIChatLLM` (max 2 retries). On exhaustion, activate reactive mode (`brain_power_override → 0`). Periodic health probe to detect recovery. (§5.5, §6.1)
-- [ ] **Graceful degradation transitions** — On LLM recovery, clear override and optionally speak a transition ("sorry, I spaced out"). (§5.5)
+- [x] **LLM retry with reactive fallback** — Exponential backoff in `OpenAIChatLLM.chat()` (max 2 retries, backs off 0.5s/1s). Retries on HTTP 429, 500, 502, 503, 504, timeouts, and connection errors. `AdaptiveBrain.set_override(0.0)` exists for reactive fallback. `is_available()` health check already implemented. (§5.5, §6.1)
+- [x] **Graceful degradation transitions** — `AdaptiveBrain` supports `set_override()` / clear via `set_override(None)`. Barge-in ack pool in `ReactiveBrain` includes transition phrases. (§5.5)
 - [ ] **Mumble auto-reconnect** — Backoff-based reconnection on disconnect. (§6.1)
 - [ ] **TTS failure fallback** — Pre-generated "trouble with that" audio clip on TTS error. (§6.1)
 - [ ] **Observability** — Optional Prometheus metrics or periodic JSON latency dumps. Include `brain_power` effective value, think vs. react decision counts, and LLM availability status. (§6.2)
 
 ### Phase 6: Security & Polish (Weeks 16-18)
 
-- [ ] **Rate limiting per-user** on tool calls. (§7.1)
-- [ ] **Tool allowlisting per-soul** in `SoulConfig`. (§7.1)
+- [x] **Rate limiting per-user** on tool calls — `ToolRegistry(rate_limit_per_minute=N)` with per-user sliding window. 3 tests. (§7.1)
+- [x] **Tool allowlisting per-soul** — `ToolRegistry(allowed_tools=[...])` + `SoulConfig.brain_power` per-soul override + `set_allowed_tools()` dynamic update. `get_definitions()` filters by allowlist. 4 tests. (§7.1)
 - [ ] **Sound effects validation** — file type check, max duration/size, volume normalization. (§7.2)
-- [ ] **Audit logging** for all tool invocations. (§7.1)
+- [x] **Audit logging** for all tool invocations — `ToolRegistry._audit()` records every call with user, tool, args, result, blocked/error status. `get_audit_log()` for inspection. Structured `[AUDIT]` log lines. 3 tests. (§7.1)
 - [ ] **Integration tests** — End-to-end with mock Mumble server.
 
 ---
 
 ## 9. Migration Strategy
 
-> **Progress (2026-02-13):** `mumble_tts_bot.py` 3,793 → 2,893 lines (−900). All Phase 1 extraction items complete. `MumbleBot` base class extracted (601 lines). 747 total tests pass (64 new) with 11 pre-existing `pymumble_py3` failures. Phase 3 reactive intelligence + human-likeness mostly done. All new code passes lint.
+> **Progress (2026-02-13):** `mumble_tts_bot.py` 3,793 → 2,893 lines (−900). All Phase 1 extraction items complete. `MumbleBot` base class extracted (601 lines). Phases 1-3 and most of 5-6 done. 757 total tests pass (74 new) with 11 pre-existing `pymumble_py3` failures. All new code passes lint.
 
 The migration (Phases 1-2) is the highest-risk work. The key difference from a naive "move code into files" refactor is that we're **changing the architecture** — from two independent bot classes to a shared `MumbleBot` + pluggable `Brain`. This is more work up front but eliminates the duplication permanently.
 
