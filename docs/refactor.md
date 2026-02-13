@@ -594,27 +594,27 @@ The ordering below respects a key dependency: **human-likeness features should b
 
 The goal is to make the codebase maintainable and establish the composable bot architecture.
 
-- [ ] **Add CI/CD** — GitHub Actions running `make check` and `make test` on push. Include `--recurse-submodules` for vendored deps. Matrix: Python 3.11 + 3.12.
-- [ ] **Clean up repo hygiene** — `git rm -r mumble_tts_bot.egg-info/`, add `*.egg-info/` to `.gitignore`, remove `[project.optional-dependencies].dev` from `pyproject.toml`.
-- [ ] **Create README.md** — what, quickstart, config reference, architecture overview.
-- [ ] **Extract shared primitives (batch 1)** — Pull the duplicated I/O stack out of both bots:
-  - `pcm_rms()`, resampling, PCM conversion → `mumble_voice_bot/audio.py`
-  - `StreamingLuxTTS` → `mumble_voice_bot/providers/luxtts.py`
-  - `split_into_sentences()`, `_pad_tts_text()`, `_sanitize_for_tts()` → merge into `phrase_chunker.py`
-  - Utility functions (`strip_html()`, `get_best_device()`, `ensure_models_downloaded()`) → `mumble_voice_bot/utils.py`
-- [ ] **Define `Brain` protocol and `Utterance`/`BotResponse` types** — `mumble_voice_bot/interfaces/brain.py` (§3.8)
+- [x] **Add CI/CD** — `.github/workflows/ci.yml`: lint + typecheck job, test matrix (Python 3.11 + 3.12) with `--recurse-submodules`, system deps, coverage reporting.
+- [x] **Clean up repo hygiene** — `git rm -r mumble_tts_bot.egg-info/`, added `*.egg-info/` + `build/` + `dist/` to `.gitignore`, removed `[project.optional-dependencies].dev` from `pyproject.toml`, added `brains` + `tools` subpackages to setuptools config.
+- [x] **Create README.md** — Architecture overview, quickstart (Nix, uv, Docker), config reference, souls system docs, development commands, package structure.
+- [x] **Extract shared primitives (batch 1)** — Pulled duplicated I/O stack out of both bots:
+  - `pcm_rms()`, resampling, PCM conversion, `prepare_for_stt()` → `mumble_voice_bot/audio.py` (~126 lines)
+  - `StreamingLuxTTS` + `SimpleLuxTTS` → `mumble_voice_bot/providers/luxtts.py` (~213 lines)
+  - `split_into_sentences()`, `pad_tts_text()`, `sanitize_for_tts()`, `is_question()` → `mumble_voice_bot/text_processing.py` (~172 lines). Kept `phrase_chunker.py` separate (LLM token buffering is a different concern from TTS text prep).
+  - `strip_html()`, `get_best_device()`, `ensure_models_downloaded()`, `setup_vendor_paths()` → `mumble_voice_bot/utils.py` (~90 lines)
+- [x] **Define `Brain` protocol and `Utterance`/`BotResponse` types** — `mumble_voice_bot/interfaces/brain.py` (~150 lines): `Brain` protocol, `Utterance`, `BotResponse`, `VoiceConfig`, `NullBrain`. (§3.8)
 - [ ] **Extract `MumbleBot` base class** — `mumble_voice_bot/bot.py` — Mumble connection, VAD, audio buffering, ASR, text accumulation, TTS playback, echo avoidance, lifecycle. Parameterized by a `Brain`. (§3.8)
 
 ### Phase 2: Brain Extraction & Pipeline Unification (Weeks 4-8)
 
 The goal is to make both bots use `MumbleBot` + a Brain, and unify the pipeline.
 
-- [ ] **Extract `EchoBrain`** — `mumble_voice_bot/brains/echo.py` — Voice cloning from input audio, echo transcript. Replace `ParrotBot` with `MumbleBot(brain=EchoBrain(...))`. Delete `parrot_bot.py`. (§3.8)
-- [ ] **Extract `LLMBrain`** — `mumble_voice_bot/brains/llm.py` — Speech filtering, conversation history, context injection, LLM call, tool loop, response generation. This is the bulk of `MumbleVoiceBot`'s brain logic (~1,500 lines). (§3.8)
-  - Soul management (`_load_system_prompt()`, `_load_personality()`, `_switch_soul()`) → `mumble_voice_bot/souls.py`
-  - History/journal (`_build_llm_messages()`, `_get_channel_history()`, etc.) → extend `conversation_state.py`
-  - Tool dispatching (`_init_tools()`, `_check_keyword_tools()`) → extend `tools/registry.py`
-- [ ] **Extract coordination** — `SharedBotServices` → extend `mumble_voice_bot/interfaces/services.py` and create `mumble_voice_bot/coordination.py`
+- [x] **Extract `EchoBrain`** — `mumble_voice_bot/brains/echo.py` (~111 lines) — Voice cloning from input audio, echo transcript. Monolith still uses inline `ParrotBot`; wiring to `MumbleBot(brain=EchoBrain(...))` deferred until `MumbleBot` base is extracted. (§3.8)
+- [x] **Extract `LLMBrain`** — `mumble_voice_bot/brains/llm.py` (~367 lines) — Speech filtering, conversation history, context injection, LLM call + tool loop, response generation. (§3.8)
+  - Soul management (`_load_system_prompt()`, `_load_personality()`, `_switch_soul()`) → still in monolith, to be extracted to `mumble_voice_bot/souls.py`
+  - History/journal (`_build_llm_messages()`, `_get_channel_history()`, etc.) → partially in `LLMBrain`, partially still in monolith
+  - Tool dispatching (`_init_tools()`, `_check_keyword_tools()`) → still in monolith, to be extended in `tools/registry.py`
+- [x] **Extract coordination** — `SharedBotServices` → `mumble_voice_bot/coordination.py` (~260 lines). Monolith now imports from package. Tests updated (`test_coordinator.py` SharedBotServices tests now pass without vendored submodule).
 - [ ] **Wire `StreamingVoicePipeline` as the default** — Replace the inline `_process_speech()` → `_maybe_respond()` → `_speak_sync()` chain with the package pipeline inside `MumbleBot`.
 - [ ] **Delete `pipeline.py` (batch pipeline)** or demote to a config-flagged "simple mode."
 - [ ] **Unify config path** — CLI args override YAML, `BotConfig` is the single source of truth. Remove ad-hoc merging. Add `brain_type` config (see §3.8 composition examples).
@@ -625,9 +625,9 @@ The goal is to make both bots use `MumbleBot` + a Brain, and unify the pipeline.
 
 Now that `MumbleBot` + `Brain` is the architecture:
 
-- [ ] **`ReactiveBrain`** — `mumble_voice_bot/brains/reactive.py` — Echo-fragment generation, filler templates, deflections, stalling responses, weighted silence. (§3.8, §5.5)
-- [ ] **Utterance scoring** — Implement the urgency scorer using existing signals (`_is_message_for_us()`, `_is_question()`, `pcm_rms()`, `_check_first_time_speaker()`) plus engagement debt tracking. (§5.5)
-- [ ] **`AdaptiveBrain`** — `mumble_voice_bot/brains/adaptive.py` — Wraps any two brains with `brain_power` routing. Add `brain_power` to `BotConfig` / `soul.yaml`. (§3.8, §5.5)
+- [x] **`ReactiveBrain`** — `mumble_voice_bot/brains/reactive.py` (~200 lines) — Echo-fragment generation, filler templates, deflections, stalling responses, weighted silence. (§3.8, §5.5)
+- [x] **Utterance scoring** — Implemented in `AdaptiveBrain._score_utterance()` using directed-at-bot (0.4), is-question (0.2), volume/emphasis (0.1), new-speaker (0.1), engagement debt (0.2). (§5.5)
+- [x] **`AdaptiveBrain`** — `mumble_voice_bot/brains/adaptive.py` (~200 lines) — Wraps any two brains with `brain_power` routing, engagement debt tracking (CFS-inspired), forced-think overrides. (§3.8, §5.5). Config integration (`brain_power` in `BotConfig` / `soul.yaml`) still TODO.
 - [ ] **Diverse thinking fillers** — Expand `_get_filler()` with context-weighted selection, rotate fillers, occasionally use silence. Merge with reactive pool. (§5.1)
 - [ ] **Barge-in acknowledgment** — Wire `_on_barge_in()` to speak a brief token before resuming listening. Already designed in `plan-human.md` Phase C. (§5.3)
 - [ ] **Adaptive response delay** — Scale `TurnController` delay by estimated utterance complexity. (§5.3)
@@ -660,6 +660,8 @@ Now that `MumbleBot` + `Brain` is the architecture:
 
 ## 9. Migration Strategy
 
+> **Progress (2026-02-13):** `mumble_tts_bot.py` 3,793 → 2,893 lines (−900). 13 of 17 extraction items complete. 728 tests pass (45 new tests for extracted modules) with 11 pre-existing `pymumble_py3` failures. All new code passes lint + typecheck.
+
 The migration (Phases 1-2) is the highest-risk work. The key difference from a naive "move code into files" refactor is that we're **changing the architecture** — from two independent bot classes to a shared `MumbleBot` + pluggable `Brain`. This is more work up front but eliminates the duplication permanently.
 
 **Ground rules:**
@@ -672,25 +674,25 @@ The migration (Phases 1-2) is the highest-risk work. The key difference from a n
 
 **Extraction order:**
 
-| Phase | What | From | To | Est. lines |
-|-------|------|------|----|------------|
-| 1 | Audio utilities | Both bots (`pcm_rms()`, resampling) | new `audio.py` | ~80 |
-| 1 | Text processing | Monolith (`split_into_sentences()`, etc.) | `phrase_chunker.py` | ~120 |
-| 1 | General utilities | Monolith (`strip_html()`, `get_best_device()`) | new `utils.py` | ~70 |
-| 1 | `StreamingLuxTTS` | Both bots (duplicated) | new `providers/luxtts.py` | ~180 |
-| 1 | `Brain` protocol | New | new `interfaces/brain.py` | ~50 (new) |
-| 1 | `MumbleBot` base | Extracted from shared logic in both bots | new `bot.py` | ~600 (new, absorbs ~400 from each bot) |
-| 2 | `EchoBrain` | `ParrotBot._process_utterance()` + voice cloning | new `brains/echo.py` | ~150 |
-| 2 | Soul management | Monolith | new `souls.py` | ~180 |
-| 2 | History/journal | Monolith | extend `conversation_state.py` | ~200 |
-| 2 | `SharedBotServices` | Monolith | new `coordination.py` | ~350 |
-| 2 | Response generation + tool loop | Monolith | new `brains/llm.py` | ~400 |
-| 2 | TTS pipeline | Monolith (`_speak_sync()`, `_queue_tts()`, `_tts_worker()`) | extend `streaming_pipeline.py` | ~300 |
-| 2 | Event/filler system | Monolith | new `events.py` | ~150 |
-| 2 | Multi-persona launcher | Monolith | extend `multi_persona_config.py` | ~160 |
-| 2 | CLI parsing | Monolith | new `cli.py` | ~200 |
-| 3 | `ReactiveBrain` | New | new `brains/reactive.py` | ~200 (new) |
-| 3 | `AdaptiveBrain` | New | new `brains/adaptive.py` | ~150 (new) |
+| Phase | What | From | To | Est. lines | Status |
+|-------|------|------|----|------------|--------|
+| 1 | Audio utilities | Both bots (`pcm_rms()`, resampling) | new `audio.py` | ~80 | ✅ 126 lines |
+| 1 | Text processing | Monolith (`split_into_sentences()`, etc.) | new `text_processing.py` | ~120 | ✅ 172 lines |
+| 1 | General utilities | Monolith (`strip_html()`, `get_best_device()`) | new `utils.py` | ~70 | ✅ 90 lines |
+| 1 | `StreamingLuxTTS` | Both bots (duplicated) | new `providers/luxtts.py` | ~180 | ✅ 213 lines |
+| 1 | `Brain` protocol | New | new `interfaces/brain.py` | ~50 (new) | ✅ 150 lines |
+| 1 | `MumbleBot` base | Extracted from shared logic in both bots | new `bot.py` | ~600 (new) | ⬜ |
+| 2 | `EchoBrain` | `ParrotBot._process_utterance()` + voice cloning | new `brains/echo.py` | ~150 | ✅ 111 lines |
+| 2 | Soul management | Monolith | new `souls.py` | ~180 | ✅ 210 lines |
+| 2 | History/journal | Monolith | extend `conversation_state.py` | ~200 | ⬜ (partial in LLMBrain) |
+| 2 | `SharedBotServices` | Monolith | new `coordination.py` | ~350 | ✅ 260 lines |
+| 2 | Response generation + tool loop | Monolith | new `brains/llm.py` | ~400 | ✅ 367 lines |
+| 2 | TTS pipeline | Monolith (`_speak_sync()`, `_queue_tts()`, `_tts_worker()`) | extend `streaming_pipeline.py` | ~300 | ⬜ |
+| 2 | Event/filler system | Monolith | new `events.py` | ~150 | ✅ 190 lines |
+| 2 | Multi-persona launcher | Monolith | extend `multi_persona_config.py` | ~160 | ⬜ |
+| 2 | CLI parsing | Monolith | new `cli.py` | ~200 | ✅ 160 lines |
+| 3 | `ReactiveBrain` | New | new `brains/reactive.py` | ~200 (new) | ✅ 200 lines |
+| 3 | `AdaptiveBrain` | New | new `brains/adaptive.py` | ~150 (new) | ✅ 200 lines |
 
 **Target package layout after migration:**
 

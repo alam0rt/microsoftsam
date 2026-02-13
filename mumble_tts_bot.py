@@ -165,6 +165,9 @@ from mumble_voice_bot.text_processing import (
 from mumble_voice_bot.utils import strip_html, get_best_device, ensure_models_downloaded
 from mumble_voice_bot.providers.luxtts import StreamingLuxTTS
 from mumble_voice_bot.coordination import SharedBotServices  # noqa: F811
+from mumble_voice_bot.souls import load_system_prompt, load_personality, get_fallback_prompt, switch_soul
+from mumble_voice_bot.events import EventResponder, ChannelActivityTracker
+from mumble_voice_bot.cli import create_argument_parser, merge_config_with_args
 
 
 # =============================================================================
@@ -753,78 +756,16 @@ class MumbleVoiceBot:
         print(f"[LLM] Initialized: {final_model} @ {final_endpoint}{extra_str}")
 
     def _load_system_prompt(self, prompt_file: str = None, personality: str = None) -> str:
-        """Load system prompt from file, optionally combined with a personality."""
-        base_prompt = None
-
-        # Try specified file first
-        if prompt_file and os.path.exists(prompt_file):
-            with open(prompt_file, 'r') as f:
-                print(f"[LLM] Loaded prompt from {prompt_file}")
-                base_prompt = f.read()
-
-        # Try default locations
-        if not base_prompt:
-            default_paths = [
-                os.path.join(_THIS_DIR, "prompts", "default.md"),
-                os.path.join(_THIS_DIR, "prompts", "default.txt"),
-                "prompts/default.md",
-                "prompts/default.txt",
-            ]
-
-            for path in default_paths:
-                if os.path.exists(path):
-                    with open(path, 'r') as f:
-                        print(f"[LLM] Loaded prompt from {path}")
-                        base_prompt = f.read()
-                        break
-
-        # Fallback to inline prompt
-        if not base_prompt:
-            print("[LLM] Using built-in default prompt")
-            base_prompt = self._get_fallback_prompt()
-
-        # Load personality if specified
-        if personality:
-            personality_prompt = self._load_personality(personality)
-            if personality_prompt:
-                base_prompt = base_prompt + "\n\n" + "=" * 40 + "\n\n" + personality_prompt
-
-        return base_prompt
+        """Load system prompt — delegates to mumble_voice_bot.souls."""
+        return load_system_prompt(prompt_file=prompt_file, personality=personality, project_dir=_THIS_DIR)
 
     def _load_personality(self, personality: str) -> str:
-        """Load a personality file by name."""
-        # Check if it's already a path
-        if os.path.exists(personality):
-            with open(personality, 'r') as f:
-                print(f"[LLM] Loaded personality from {personality}")
-                return f.read()
-
-        # Try personalities directory
-        personality_paths = [
-            os.path.join(_THIS_DIR, "personalities", f"{personality}.md"),
-            os.path.join(_THIS_DIR, "personalities", f"{personality}.txt"),
-            os.path.join(_THIS_DIR, "personalities", personality),
-            f"personalities/{personality}.md",
-            f"personalities/{personality}.txt",
-        ]
-
-        for path in personality_paths:
-            if os.path.exists(path):
-                with open(path, 'r') as f:
-                    print(f"[LLM] Loaded personality: {personality}")
-                    return f.read()
-
-        print(f"[LLM] Warning: Personality '{personality}' not found")
-        return None
+        """Load a personality file — delegates to mumble_voice_bot.souls."""
+        return load_personality(personality, project_dir=_THIS_DIR)
 
     def _get_fallback_prompt(self) -> str:
-        """Fallback prompt if no file is found."""
-        return """You are a casual voice assistant in a Mumble voice channel.
-
-Your responses will be spoken by TTS. Never use emojis, symbols, or formatting.
-Keep responses to 1-2 sentences. Use casual language and contractions.
-Sound like a friend chatting, not a corporate assistant.
-Write numbers and symbols as words: "about 5 dollars" not "$5"."""
+        """Fallback prompt — delegates to mumble_voice_bot.souls."""
+        return get_fallback_prompt()
 
     def _init_speech_filters(self) -> None:
         """Initialize speech filtering components.
@@ -2324,79 +2265,16 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
     # =========================================================================
 
     def _get_filler(self, filler_type: str) -> str | None:
-        """Get a random filler phrase from soul config.
-
-        Checks events first, then falls back to fallbacks for compatibility.
-
-        Args:
-            filler_type: One of 'thinking', 'still_thinking', 'interrupted'
-
-        Returns:
-            Random filler phrase, or None if unavailable.
-        """
-        import random
-
-        fillers = None
-
-        # First try events config
-        if self.soul_config and self.soul_config.events:
-            fillers = getattr(self.soul_config.events, filler_type, None)
-
-        # Fall back to fallbacks
-        if not fillers and self.soul_config and self.soul_config.fallbacks:
-            fillers = getattr(self.soul_config.fallbacks, filler_type, None)
-
-        if not fillers:
-            return None
-
-        return random.choice(fillers)
+        """Get a random filler phrase — delegates to EventResponder."""
+        if not hasattr(self, '_event_responder'):
+            self._event_responder = EventResponder(self.soul_config)
+        return self._event_responder.get_filler(filler_type)
 
     def _get_event_response(self, event_type: str, user: str = None) -> str | None:
-        """Get a random event-triggered response from soul config.
-
-        First checks soul_config.events, then falls back to soul_config.fallbacks
-        for compatible event types.
-
-        Args:
-            event_type: Event name (e.g., 'user_first_speech', 'interrupted', 'thinking')
-            user: Username for {user} placeholder substitution.
-
-        Returns:
-            Response string with placeholders filled, or None if disabled/unavailable.
-        """
-        import random
-
-        responses = None
-
-        # First try events config
-        if self.soul_config and self.soul_config.events:
-            responses = getattr(self.soul_config.events, event_type, None)
-
-        # Fall back to fallbacks for compatible types
-        if not responses and self.soul_config and self.soul_config.fallbacks:
-            # Map event types to fallback types
-            fallback_map = {
-                'user_first_speech': 'greetings',
-                'user_joined': 'greetings',
-                'user_left': 'farewells',
-                'thinking': 'thinking',
-                'still_thinking': 'still_thinking',
-                'interrupted': 'interrupted',
-            }
-            fallback_key = fallback_map.get(event_type)
-            if fallback_key:
-                responses = getattr(self.soul_config.fallbacks, fallback_key, None)
-
-        if not responses:
-            return None
-
-        response = random.choice(responses)
-
-        # Fill in placeholders
-        if user:
-            response = response.replace("{user}", user)
-
-        return response
+        """Get a random event response — delegates to EventResponder."""
+        if not hasattr(self, '_event_responder'):
+            self._event_responder = EventResponder(self.soul_config)
+        return self._event_responder.get_event_response(event_type, user)
 
     def _trigger_event(self, event_type: str, user: str = None) -> bool:
         """Trigger an event and speak the response if configured.
@@ -2427,19 +2305,25 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
 
     def _record_channel_activity(self):
         """Record that activity occurred in the channel (resets quiet timer)."""
-        self._last_channel_activity = time.time()
-        self._quiet_event_triggered = False  # Allow quiet event to trigger again
+        if hasattr(self, '_activity_tracker'):
+            self._activity_tracker.record_activity()
+        else:
+            self._last_channel_activity = time.time()
+            self._quiet_event_triggered = False
 
     def _check_channel_quiet(self):
         """Check if channel has been quiet and trigger event if so."""
-        if self._quiet_event_triggered:
-            return  # Already triggered, wait for activity
-
-        time_since_activity = time.time() - self._last_channel_activity
-        if time_since_activity >= self._quiet_threshold:
-            self._quiet_event_triggered = True
-            self.logger.info(f"[EVENT] Channel quiet for {time_since_activity:.0f}s, triggering event")
-            self._trigger_event('channel_quiet')
+        if hasattr(self, '_activity_tracker'):
+            if self._activity_tracker.check_channel_quiet():
+                self._trigger_event('channel_quiet')
+        else:
+            if self._quiet_event_triggered:
+                return
+            time_since_activity = time.time() - self._last_channel_activity
+            if time_since_activity >= self._quiet_threshold:
+                self._quiet_event_triggered = True
+                self.logger.info(f"[EVENT] Channel quiet for {time_since_activity:.0f}s, triggering event")
+                self._trigger_event('channel_quiet')
 
     def _start_quiet_timer(self):
         """Start background thread to check for channel quiet."""
@@ -2453,73 +2337,38 @@ Write numbers and symbols as words: "about 5 dollars" not "$5"."""
         self._quiet_timer.start()
 
     def _check_long_speech(self, user_id: int, user_name: str, speech_duration: float):
-        """Track speech duration and trigger event if user talked for a long time.
-
-        Args:
-            user_id: The user's session ID.
-            user_name: The user's name.
-            speech_duration: Duration of this speech segment in seconds.
-        """
-        # Accumulate speech duration for this user
-        if user_id not in self.user_total_speech_time:
-            self.user_total_speech_time[user_id] = 0.0
-
-        self.user_total_speech_time[user_id] += speech_duration
-
-        # Check if they've exceeded the threshold
-        total = self.user_total_speech_time[user_id]
-        if total >= self.long_speech_threshold:
-            self.logger.info(f"[EVENT] {user_name} spoke for {total:.1f}s total, triggering long_speech_ended")
-            self._trigger_event('long_speech_ended', user_name)
-            # Reset counter for next long speech
-            self.user_total_speech_time[user_id] = 0.0
+        """Track speech duration — delegates to ChannelActivityTracker."""
+        if hasattr(self, '_activity_tracker'):
+            if self._activity_tracker.check_long_speech(user_id, user_name, speech_duration):
+                self._trigger_event('long_speech_ended', user_name)
+        else:
+            if user_id not in self.user_total_speech_time:
+                self.user_total_speech_time[user_id] = 0.0
+            self.user_total_speech_time[user_id] += speech_duration
+            total = self.user_total_speech_time[user_id]
+            if total >= self.long_speech_threshold:
+                self._trigger_event('long_speech_ended', user_name)
+                self.user_total_speech_time[user_id] = 0.0
 
     def _reset_speech_tracking(self, user_id: int):
-        """Reset speech tracking for a user (e.g., when they stop talking)."""
-        self.user_total_speech_time.pop(user_id, None)
+        """Reset speech tracking for a user."""
+        if hasattr(self, '_activity_tracker'):
+            self._activity_tracker.reset_speech_tracking(user_id)
+        else:
+            self.user_total_speech_time.pop(user_id, None)
 
     def _check_first_time_speaker(self, user_name: str) -> bool:
-        """Check if this is the first time we've heard from this user.
-
-        Args:
-            user_name: The user's name.
-
-        Returns:
-            True if this is their first speech this session.
-        """
+        """Check if this is the first time we've heard from this user."""
+        if hasattr(self, '_activity_tracker'):
+            return self._activity_tracker.check_first_time_speaker(user_name)
         if user_name in self._greeted_users:
             return False
-
         self._greeted_users.add(user_name)
-        self.logger.info(f"[EVENT] First speech detected from: {user_name}")
         return True
 
     def _is_question(self, text: str) -> bool:
-        """Detect if text is likely a question (simple heuristics).
-
-        Args:
-            text: The user's utterance.
-
-        Returns:
-            True if likely a question.
-        """
-        text = text.strip().lower()
-
-        # Ends with question mark
-        if text.endswith('?'):
-            return True
-
-        # Starts with question words
-        question_starters = (
-            'who', 'what', 'when', 'where', 'why', 'how',
-            'is', 'are', 'was', 'were', 'will', 'would', 'could', 'should',
-            'can', 'do', 'does', 'did', 'have', 'has', 'had',
-        )
-        first_word = text.split()[0] if text.split() else ''
-        if first_word in question_starters:
-            return True
-
-        return False
+        """Detect if text is likely a question — delegates to text_processing."""
+        return _is_question_heuristic(text)
 
     def _speak_filler(self, filler_type: str):
         """Speak a filler phrase immediately (bypasses queue).
@@ -2952,63 +2801,7 @@ def run_multi_persona_bot(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description='Mumble Voice Bot - LLM-powered voice assistant'
-    )
-
-    # Config file (loaded first, CLI args override)
-    parser.add_argument('--config', default=None,
-                        help='Path to config.yaml')
-
-    # Logging settings
-    parser.add_argument('--log-level', default='INFO',
-                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
-                        help='Log level')
-    parser.add_argument('--log-json', action='store_true',
-                        help='Output logs in JSON format')
-    parser.add_argument('--log-file', default=None,
-                        help='Log file path (JSON format)')
-
-    # Mumble settings
-    parser.add_argument('--host', default=None, help='Mumble server')
-    parser.add_argument('--port', type=int, default=None, help='Mumble port')
-    parser.add_argument('--user', default=None, help='Bot username')
-    parser.add_argument('--password', default=None, help='Server password')
-    parser.add_argument('--channel', default=None, help='Channel to join')
-
-    # Voice settings
-    parser.add_argument('--reference', default=None,
-                        help='Reference audio for voice cloning')
-    parser.add_argument('--device', default='auto',
-                        choices=['auto', 'cpu', 'cuda', 'mps'],
-                        help='Compute device')
-    parser.add_argument('--steps', type=int, default=None,
-                        help='TTS quality (more steps = better quality, slower)')
-    parser.add_argument('--voices-dir', default=None,
-                        help='Directory for cached voices')
-
-    # VAD settings
-    parser.add_argument('--asr-threshold', type=int, default=None,
-                        help='Voice activity threshold (use --debug-rms to tune)')
-    parser.add_argument('--debug-rms', action='store_true',
-                        help='Show RMS levels for threshold tuning')
-
-    # LLM settings
-    parser.add_argument('--llm-endpoint', default=None,
-                        help='LLM API endpoint (default: Ollama localhost)')
-    parser.add_argument('--llm-model', default=None,
-                        help='LLM model name')
-    parser.add_argument('--llm-api-key', default=None,
-                        help='LLM API key (or use LLM_API_KEY env var)')
-    parser.add_argument('--llm-system-prompt', default=None,
-                        help='System prompt for the assistant')
-    parser.add_argument('--personality', default=None,
-                        help='Personality to use (e.g., "imperial", or path to file)')
-
-    # Model storage settings
-    parser.add_argument('--hf-home', default=None,
-                        help='HuggingFace home directory (where models are cached)')
-
+    parser = create_argument_parser()
     args = parser.parse_args()
 
     # Setup logging first
@@ -3050,51 +2843,10 @@ def main():
             logger.info(f"Models environment: {', '.join(f'{k}={v}' for k, v in applied.items())}")
 
     # Merge config with CLI args (CLI takes precedence)
-    # Mumble settings
-    host = args.host or (config.mumble.host if config else None) or 'localhost'
-    port = args.port or (config.mumble.port if config else None) or 64738
-    # User name priority: CLI arg > config mumble.user > soul name > fallback
-    soul_name_for_user = config.soul_config.name if (config and config.soul_config) else None
-    user = args.user or (config.mumble.user if config else None) or soul_name_for_user or 'VoiceBot'
-    password = args.password or (config.mumble.password if config else None) or ''
-    channel = args.channel or (config.mumble.channel if config else None)
+    cfg = merge_config_with_args(args, config)
 
-    # TTS settings
-    reference = args.reference or (config.tts.ref_audio if config else None) or 'reference.wav'
-    steps = args.steps or (config.tts.num_steps if config else None) or 4
-    voices_dir = args.voices_dir or 'voices'
-
-    # VAD settings
-    asr_threshold = args.asr_threshold or (config.bot.asr_threshold if config else None) or 2000
-
-    # LLM settings
-    llm_endpoint = args.llm_endpoint or (config.llm.endpoint if config else None)
-    llm_model = args.llm_model or (config.llm.model if config else None)
-    llm_api_key = args.llm_api_key or (config.llm.api_key if config else None)
-    llm_system_prompt = args.llm_system_prompt
-    personality = args.personality or (config.llm.personality if config else None)
-
-    # If config has prompt_file, load it
-    if config and config.llm.prompt_file and not llm_system_prompt:
-        prompt_path = config.llm.prompt_file
-        if os.path.exists(prompt_path):
-            with open(prompt_path, 'r') as f:
-                llm_system_prompt = f.read()
-            print(f"[LLM] Loaded prompt from {prompt_path}")
-
-    # NeMo Nemotron STT settings (only supported backend)
-    nemotron_model = (config.stt.nemotron_model if config else None) or "nvidia/nemotron-speech-streaming-en-0.6b"
-    nemotron_chunk_ms = (config.stt.nemotron_chunk_ms if config else None) or 160
-    nemotron_device = (config.stt.nemotron_device if config else None) or "cuda"
-
-    # Staleness settings
-    max_response_staleness = (config.bot.max_response_staleness if config else None) or 5.0
-
-    # Barge-in settings (default False - bot talks over everyone)
-    barge_in_enabled = config.bot.barge_in_enabled if config else False
-
-    # TTS device - allow override from config for memory-constrained GPUs
-    tts_device_config = (config.tts.device if config else None) or "auto"
+    # Determine device
+    tts_device_config = cfg['tts_device_config']
     if args.device != 'auto':
         device = args.device
     elif tts_device_config != 'auto':
@@ -3106,31 +2858,31 @@ def main():
     ensure_models_downloaded(device=device)
 
     bot = MumbleVoiceBot(
-        host=host,
-        user=user,
-        port=port,
-        password=password,
-        channel=channel,
-        reference_audio=reference,
+        host=cfg['host'],
+        user=cfg['user'],
+        port=cfg['port'],
+        password=cfg['password'],
+        channel=cfg['channel'],
+        reference_audio=cfg['reference'],
         device=device,
-        num_steps=steps,
-        asr_threshold=asr_threshold,
+        num_steps=cfg['steps'],
+        asr_threshold=cfg['asr_threshold'],
         debug_rms=args.debug_rms,
-        voices_dir=voices_dir,
-        llm_endpoint=llm_endpoint,
-        llm_model=llm_model,
-        llm_api_key=llm_api_key,
-        llm_system_prompt=llm_system_prompt,
-        personality=personality,
+        voices_dir=cfg['voices_dir'],
+        llm_endpoint=cfg['llm_endpoint'],
+        llm_model=cfg['llm_model'],
+        llm_api_key=cfg['llm_api_key'],
+        llm_system_prompt=cfg['llm_system_prompt'],
+        personality=cfg['personality'],
         config_file=args.config,
-        nemotron_model=nemotron_model,
-        nemotron_chunk_ms=nemotron_chunk_ms,
-        nemotron_device=nemotron_device,
-        max_response_staleness=max_response_staleness,
-        barge_in_enabled=barge_in_enabled,
-        soul_config=config.soul_config if config else None,
-        soul_name=config.soul if config else None,
-        tools_config=config.tools if config else None,
+        nemotron_model=cfg['nemotron_model'],
+        nemotron_chunk_ms=cfg['nemotron_chunk_ms'],
+        nemotron_device=cfg['nemotron_device'],
+        max_response_staleness=cfg['max_response_staleness'],
+        barge_in_enabled=cfg['barge_in_enabled'],
+        soul_config=cfg['soul_config'],
+        soul_name=cfg['soul_name'],
+        tools_config=cfg['tools_config'],
     )
 
     bot.start()
